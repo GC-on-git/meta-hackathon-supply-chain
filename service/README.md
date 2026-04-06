@@ -1,6 +1,5 @@
 ---
 title: Supply Chain Environment Server
-emoji: 🚀
 colorFrom: green
 colorTo: red
 sdk: docker
@@ -26,7 +25,7 @@ This package mirrors the layout described in the official **OpenEnv** walkthroug
 | Type-safe **Action** / **Observation** / **State** (Pydantic models) | `service/models.py` — `AgentAction`, `AgentObservation`, `SupplyChainState` |
 | **Environment** — `reset`, `step`, `state` | `service/hackathon_environment.py` — `SupplyChainEnv` |
 | **EnvClient** — HTTP `reset` / `step` / `state` | `service/client.py` — `SupplyChainClient` |
-| FastAPI server wiring | `server/app.py` — `create_app(SupplyChainEnv, …)` (ASGI: `server.app:app` or repo-root shim `app:app`) |
+| FastAPI server wiring | `server/app.py` — `create_app(SupplyChainEnv, …)` |
 
 Run the tutorial notebook top-to-bottom for the client/server mental model (REST-style envs, isolation, typing); then use this repo for the supply-chain **domain** on the same APIs.
 
@@ -47,7 +46,7 @@ Each **episode** is a sequence of **days** (steps), up to a **horizon** (default
 9. **Reward terms** are computed from holding, stockouts/backlogs, transport, carbon, and same-day fill rate; the step **reward** is clipped to **[-1, 1]**.
 10. The server returns an **observation** (inventories, in-transit, forecasts, masks, events, etc.) plus **reward** and **done**.
 
-So the “product” is both the **simulator** (`SupplyChainEnv`) and the **remote API** served by **`server.app:app`** (or **`app:app`** via the repo-root `app.py` shim) that lets any client train or evaluate policies against it.
+So the “product” is both the **simulator** (`SupplyChainEnv`) and the **remote API** (`server.app`) that lets any client train or evaluate policies against it.
 
 ---
 
@@ -100,7 +99,7 @@ The environment is **agnostic**: it only requires valid non-negative orders and 
 - Retailers **5, 6** ← warehouse **B** (node 2)  
 - Warehouses **1, 2** ← factory **0**
 
-**Products:** three SKUs with different demand scales (see `_sample_customer_demand` in `service/hackathon_environment.py`).
+**Products:** three SKUs with different demand scales (see `_sample_customer_demand` in `hackathon_environment.py`).
 
 ### 4.2 Action layout (21 + 21)
 
@@ -229,24 +228,21 @@ This environment abstracts that into daily decisions, stochastic demand, lead ti
 
 ### 7.1 Python path and installs
 
-The **HTTP server** lives at **`server/app.py`** (top-level `server/` package next to `service/`). The **`service`** package holds the simulator and client (see `service/pyproject.toml`). Put the **repository root** on `PYTHONPATH` so both `server` and `service` resolve.
+Imports use the package name **`service`**. The `service/` folder is the package root (see `pyproject.toml`). Typical setups:
 
-**Option A — Repository root on `PYTHONPATH` (recommended, no install)**
+**Option A — Repository root on `PYTHONPATH` (no install)**
 
 ```bash
-cd /path/to/repo-root    # directory that contains server/, service/, app.py, pyproject.toml
+cd /path/to/parent-of-service    # e.g. your Meta repo root that contains service/
 export PYTHONPATH="$PWD"
 uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
-# equivalent: uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Option B — Editable install of `service/` plus repo root for the server**
+**Option B — Editable install from `service/`**
 
 ```bash
 cd /path/to/service
 pip install -e ".[dev]"    # or: uv pip install -e ".[dev]"
-cd ..                      # back to repo root
-export PYTHONPATH="$PWD"
 uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -257,23 +253,21 @@ Then open:
 
 ### 7.2 Run module entrypoint
 
-From the **repository root** (so `server` is importable):
-
 ```bash
-cd /path/to/repo-root
-PYTHONPATH=. python -m server.app
+cd /path/to/service
+PYTHONPATH=.. python -m server.app
 ```
+
+(Here `..` is the parent directory that contains the `service` package folder.)
 
 ### 7.3 Docker
 
-The **`Dockerfile`** is at the **repository root**. From repo root:
+From repo root (parent of `service/`):
 
 ```bash
-docker build -t service-env:latest .
+docker build -t service-env:latest -f Dockerfile .
 docker run --rm -p 8000:8000 service-env:latest
 ```
-
-The image runs **`uvicorn app:app`** (see root `app.py` and `Dockerfile`).
 
 ### 7.4 Client example (HTTP)
 
@@ -399,72 +393,11 @@ Not all `test_*.py` files may be strict pytest modules; prefer **named scripts**
 
 ## 10. Project structure
 
-```text
-./
-├── Dockerfile                # Container image (Space / local)
-├── openenv.yaml              # OpenEnv manifest
-├── pyproject.toml            # Dependencies (uv)
-├── uv.lock                   # Locked deps (uv)
-├── app.py                    # ASGI shim: uvicorn app:app
-├── server/
-│   └── app.py                # FastAPI app (create_app from openenv-core)
-└── service/
-    ├── pyproject.toml        # Package metadata (optional local tooling)
-    ├── __init__.py
-    ├── hackathon_environment.py  # Core simulation + reward
-    ├── client.py             # HTTP client (SupplyChainClient)
-    ├── models.py             # Pydantic action/observation/state
-    ├── test/                 # Tests + notebook
-    └── train/                # PyTorch RL entrypoints
-```
+See the repo-root `README.md` for the full tree (`Dockerfile`, `openenv.yaml`, `server/app.py`, `service/`, …).
 
 ---
 
-## 11. Evaluation and Graded Tasks
-
-The environment supports three distinct, graded tasks, each scored programmatically between 0.0 and 1.0. The grader (`service/grading.py`) decomposes the score into weighted sub-scores:
-
-- **S_fill** — service level from `fill_rate` (piecewise-linear, task-specific target).
-- **S_cost** — cost efficiency from `total_cost` (lower cost = higher score, via `1 / (1 + cost / C_ref)`).
-- **S_co2** *(hard only)* — carbon footprint penalty (exponential decay `exp(-carbon / K_ref)`).
-
-| Task | Fill target | Weights (fill / cost / co2) |
-|------|:-----------:|:---------------------------:|
-| Easy | > 70% | 0.70 / 0.30 / — |
-| Medium | > 80% | 0.65 / 0.35 / — |
-| Hard | > 85% | 0.55 / 0.25 / 0.20 |
-
-### Baseline Inference
-
-We provide a baseline script `inference.py` at the repository root that evaluates the three tasks sequentially using an OpenAI-compatible client. Ensure the following environment variables are set:
-
-```bash
-export API_BASE_URL="https://api.openai.com/v1" # Or Hugging Face Router
-export MODEL_NAME="gpt-4o"                      # Or another capable model
-export HF_TOKEN="<your_api_key>"                # Can also use API_KEY
-```
-
-Run the inference:
-```bash
-python inference.py
-```
-**Baseline Scores** (simple heuristic, 30-step horizon, seeded rollouts):
-- Easy Task: `~0.23`
-- Medium Task: `~0.28`
-- Hard Task: `~0.29`
-
-Scores are intentionally low for a naive agent; a well-tuned policy can reach significantly higher values.
-
-### Pre-submission Validation
-
-Run the pre-submission validator before submitting:
-```bash
-python validate_submission.py https://your-space-url.hf.space --repo-dir .
-```
-
----
-
-## 12. Training RL agents (`train/`)
+## 11. Training RL agents (`train/`)
 
 This package does **not** ship a pretrained network. Training scripts use the **OpenEnv** surface area only: in-process `SupplyChainEnv.reset` / `step(AgentAction)` (the same `Environment` implementation the HTTP server wraps). There is **no Gym / Gymnasium** dependency.
 
