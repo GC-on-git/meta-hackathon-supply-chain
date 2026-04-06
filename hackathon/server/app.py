@@ -28,8 +28,6 @@ Usage:
     python -m hackathon.server.app
 """
 
-from fastapi.responses import RedirectResponse
-
 from hackathon._compat import create_app
 from hackathon.models import AgentAction, AgentObservation
 from hackathon.server.hackathon_environment import SupplyChainEnv
@@ -43,7 +41,7 @@ app = create_app(
 
 @app.get("/")
 def landing_page():
-    return RedirectResponse(url="/state")
+    return {"api_name": "Supply Chain Environment Server"}
 
 
 def main() -> None:
