@@ -27,7 +27,7 @@ from service.train import (
     observation_to_vector,
     vector_to_agent_action,
 )
-from service.server.hackathon_environment import SupplyChainEnv
+from service.hackathon_environment import SupplyChainEnv
 
 
 def main() -> None:

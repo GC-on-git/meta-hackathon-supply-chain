@@ -14,7 +14,8 @@ from random import Random
 from typing import Any, Optional
 from uuid import uuid4
 
-from service._compat import Environment
+from openenv.core.env_server import Environment
+
 from service.models import AgentAction, AgentObservation, SupplyChainState
 
 

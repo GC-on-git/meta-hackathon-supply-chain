@@ -24,7 +24,7 @@ from typing import Deque
 
 import numpy as np
 
-from service.server.hackathon_environment import SupplyChainEnv
+from service.hackathon_environment import SupplyChainEnv
 from service.train import (
     ACTION_DIM,
     STATE_VECTOR_DIM,

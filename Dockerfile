@@ -14,31 +14,26 @@ ARG ENV_NAME=service
 # Copy environment code from root
 COPY . /app/env
 
-WORKDIR /app/env/service
+WORKDIR /app/env
 
-# Ensure uv is available
 RUN if ! command -v uv >/dev/null 2>&1; then \
         curl -LsSf https://astral.sh/uv/install.sh | sh && \
         mv /root/.local/bin/uv /usr/local/bin/uv && \
         mv /root/.local/bin/uvx /usr/local/bin/uvx; \
     fi
-    
+
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ -f pyproject.toml ]; then \
-        if [ -f uv.lock ]; then \
-            uv sync --frozen --no-editable; \
-        else \
-            uv sync --no-editable; \
-        fi \
+    if [ -f uv.lock ]; then \
+        uv sync --frozen --no-editable --no-install-project; \
     else \
-        echo "No pyproject.toml found in hackathon directory" && exit 1; \
+        uv sync --no-editable --no-install-project; \
     fi
 
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
-COPY --from=builder /app/env/service/.venv /app/.venv
+COPY --from=builder /app/env/.venv /app/.venv
 COPY --from=builder /app/env /app/env
 
 ENV PATH="/app/.venv/bin:$PATH"
@@ -48,4 +43,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Run the FastAPI server
-CMD ["sh", "-c", "cd /app/env/service && uvicorn server.app:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "cd /app/env && uvicorn app:app --host 0.0.0.0 --port 8000"]

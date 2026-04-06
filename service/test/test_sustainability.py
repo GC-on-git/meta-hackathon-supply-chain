@@ -6,7 +6,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from service.models import AgentAction
-from service.server.hackathon_environment import SupplyChainEnv
+from service.hackathon_environment import SupplyChainEnv
 
 def test_sustainability():
     env = SupplyChainEnv()

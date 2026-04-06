@@ -1,0 +1,12 @@
+---
+description: Activate the project virtual environment before running any shell commands
+alwaysApply: true
+---
+
+# Virtual Environment
+
+Before running any Python or shell commands, activate the project venv:
+
+```bash
+source /Users/anuraggc/Hackathon/Meta/meta/bin/activate
+```

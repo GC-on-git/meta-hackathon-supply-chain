@@ -6,34 +6,27 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from service.models import AgentAction
-from service.server.hackathon_environment import SupplyChainEnv
+from service.hackathon_environment import SupplyChainEnv
 
 def test_stochastic_lead_times():
     env = SupplyChainEnv()
     obs = env.reset(difficulty="mvp")
-    
-    print(f"Initial Lead Times: {env._lead_times}")
-    
-    all_lead_times = [[], [], []]
-    
-    for i in range(20):
-        action = AgentAction(order_quantities=[10.0, 10.0, 10.0])
+
+    num_slots = env._num_nodes * env._num_products  # 21
+    all_lead_times: dict[int, list[int]] = {n: [] for n in range(env._num_nodes)}
+
+    for _ in range(20):
+        action = AgentAction(order_quantities=[10.0] * num_slots, shipping_methods=[0] * num_slots)
         obs = env.step(action)
-        
-        for node_index in range(3):
-            # Per-node pipelines are indexed by product; use product 0 for sampling ETAs
-            per_product = env._pipelines[node_index][0]
-            if per_product:
-                newest_shipment = per_product[-1]
-                all_lead_times[node_index].append(newest_shipment.eta)
-    
-    for i, lts in enumerate(all_lead_times):
-        unique_lts = set(lts)
-        print(f"Node {i} (Base LT {env._lead_times[i]}) unique ETAs: {unique_lts}")
-        if len(unique_lts) > 1:
-            print(f"[PASS] Node {i} shows stochastic lead times.")
-        else:
-            print(f"[FAIL] Node {i} shows FIXED lead times.")
+        for node_idx in range(env._num_nodes):
+            pipeline = env._pipelines[node_idx][0]
+            if pipeline:
+                all_lead_times[node_idx].append(pipeline[-1].eta)
+
+    nodes_with_lt = [n for n in range(env._num_nodes) if env._lead_times[n] > 0]
+    assert nodes_with_lt, "expected at least one node with positive base lead time"
+    for n in nodes_with_lt:
+        assert len(set(all_lead_times[n])) > 1, f"node {n} shows fixed lead times"
 
 if __name__ == "__main__":
     test_stochastic_lead_times()

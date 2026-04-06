@@ -401,34 +401,39 @@ Not all `test_*.py` files may be strict pytest modules; prefer **named scripts**
 ## 10. Project structure
 
 ```text
-service/
-├── openenv.yaml              # OpenEnv manifest (HF / CLI)
-├── pyproject.toml            # Package metadata, openenv-core dep
-├── uv.lock                   # Locked deps (optional but recommended)
-├── README.md                 # This file
-├── __init__.py
-├── _compat.py                # OpenEnv types / app factory
-├── client.py                 # HTTP client (SupplyChainClient)
-├── models.py                 # Pydantic action/observation/state
-├── test_*.py                 # Diagnostics / informal tests
-├── test/                     # Combined Jupyter notebook diagnostics
-├── train/                    # OpenEnv-native PyTorch RL entrypoints + obs/action helpers
-└── server/
-    ├── app.py                # FastAPI app (create_app)
+./
+├── Dockerfile                # Container image (Space / local)
+├── openenv.yaml              # OpenEnv manifest
+├── pyproject.toml            # Dependencies (uv)
+├── uv.lock                   # Locked deps (uv)
+├── app.py                    # ASGI shim: uvicorn app:app
+├── server/
+│   └── app.py                # FastAPI app (create_app from openenv-core)
+└── service/
+    ├── pyproject.toml        # Package metadata (optional local tooling)
+    ├── __init__.py
     ├── hackathon_environment.py  # Core simulation + reward
-    ├── Dockerfile
-    └── requirements.txt
+    ├── client.py             # HTTP client (SupplyChainClient)
+    ├── models.py             # Pydantic action/observation/state
+    ├── test/                 # Tests + notebook
+    └── train/                # PyTorch RL entrypoints
 ```
 
 ---
 
 ## 11. Evaluation and Graded Tasks
 
-The environment supports three distinct, graded tasks, each scored programmatically between 0.0 and 1.0 based on fill rate and costs.
+The environment supports three distinct, graded tasks, each scored programmatically between 0.0 and 1.0. The grader (`service/grading.py`) decomposes the score into weighted sub-scores:
 
-- **Task 1 (Easy):** Target > 70% fill rate with basic demand.
-- **Task 2 (Medium):** Target > 80% fill rate with volatile demand.
-- **Task 3 (Hard):** Target > 85% fill rate, considering link disruptions and carbon footprint penalties.
+- **S_fill** — service level from `fill_rate` (piecewise-linear, task-specific target).
+- **S_cost** — cost efficiency from `total_cost` (lower cost = higher score, via `1 / (1 + cost / C_ref)`).
+- **S_co2** *(hard only)* — carbon footprint penalty (exponential decay `exp(-carbon / K_ref)`).
+
+| Task | Fill target | Weights (fill / cost / co2) |
+|------|:-----------:|:---------------------------:|
+| Easy | > 70% | 0.70 / 0.30 / — |
+| Medium | > 80% | 0.65 / 0.35 / — |
+| Hard | > 85% | 0.55 / 0.25 / 0.20 |
 
 ### Baseline Inference
 
@@ -444,10 +449,12 @@ Run the inference:
 ```bash
 python inference.py
 ```
-**Baseline Scores:**
-- Easy Task: `~0.85`
-- Medium Task: `~0.60`
-- Hard Task: `~0.45`
+**Baseline Scores** (simple heuristic, 30-step horizon, seeded rollouts):
+- Easy Task: `~0.23`
+- Medium Task: `~0.28`
+- Hard Task: `~0.29`
+
+Scores are intentionally low for a naive agent; a well-tuned policy can reach significantly higher values.
 
 ### Pre-submission Validation
 

@@ -192,12 +192,7 @@ Paths are relative to the `hackathon/` package directory unless noted.
 - **Role:** Multi-stage image: install deps with `uv sync`, copy `.venv` and env code, healthcheck on `/health`, run `uvicorn server.app:app` from `/app/env`.
 - **Functions:** None (build/run instructions).
 
-### 2.12 `server/requirements.txt`
-
-- **Role:** Minimal pin list for non-uv installs (`openenv[core]`, FastAPI, Uvicorn).
-- **Functions:** None.
-
-### 2.13 `test_*.py` (root of package)
+### 2.12 `test_*.py` (root of package)
 
 Informal diagnostics; each adds repo parent to `sys.path` and prints checks.
 
@@ -211,7 +206,7 @@ Informal diagnostics; each adds repo parent to `sys.path` and prints checks.
 | `test_network_topology.py` | Upstream routing sanity |
 | `test_multi_product.py` | Dimensions (may be outdated vs 21/12—verify before trusting) |
 
-### 2.14 `train/` (OpenEnv + PyTorch RL scripts)
+### 2.13 `train/` (OpenEnv + PyTorch RL scripts)
 
 Optional **training** stack (install `pip install -e ".[train]"` from `hackathon/`). All scripts call **in-process** `SupplyChainEnv.reset` / `step(AgentAction)` — same OpenEnv types as the server, **no Gymnasium**.
 

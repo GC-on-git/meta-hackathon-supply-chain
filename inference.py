@@ -7,7 +7,8 @@ from typing import List, Dict, Any
 from openai import OpenAI
 from pydantic import BaseModel
 
-from service.server.hackathon_environment import SupplyChainEnv
+from service.hackathon_environment import SupplyChainEnv
+from service.grading import grade_episode
 from service.models import AgentAction
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
@@ -16,6 +17,12 @@ MODEL_NAME = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
 MAX_STEPS = 30
 TEMPERATURE = 0.2
 MAX_TOKENS = 1000
+
+TASK_SEEDS = {
+    "easy": int(os.getenv("TASK_SEED_EASY", "1001")),
+    "medium": int(os.getenv("TASK_SEED_MEDIUM", "2002")),
+    "hard": int(os.getenv("TASK_SEED_HARD", "3003")),
+}
 
 SYSTEM_PROMPT = textwrap.dedent("""
     You are a supply chain manager controlling 7 nodes and 3 products (21 total slots).
@@ -65,45 +72,22 @@ def parse_model_action(response_text: str) -> AgentAction:
         return AgentAction(order_quantities=[0.0] * 21, shipping_methods=[0] * 21)
 
 
-def grade_episode(state, task_name: str) -> float:
-    fill_rate = state.fill_rate
-    cost = state.total_cost
-    
-    score = fill_rate
-    
-    if task_name == "easy":
-        if fill_rate > 0.7:
-            score = 0.7 + (fill_rate - 0.7) * 0.3
-        else:
-            score = fill_rate * 0.5
-    elif task_name == "medium":
-        if fill_rate > 0.8:
-            score = 0.8 + (fill_rate - 0.8) * 0.2
-        else:
-            score = fill_rate * 0.6
-    elif task_name == "hard":
-        carbon_penalty = min(0.2, state.carbon_footprint / 10000.0) 
-        adjusted_score = fill_rate - carbon_penalty
-        score = max(0.0, min(1.0, adjusted_score))
-        
-    return float(max(0.0, min(1.0, score)))
-
-
 def run_task(client: OpenAI, task_name: str) -> float:
     print(f"\n--- Starting Task: {task_name} ---")
     env = SupplyChainEnv()
-    
+    seed = TASK_SEEDS.get(task_name, 0)
+
     try:
-        obs = env.reset(difficulty=task_name, horizon=MAX_STEPS)
-        print(f"Task initialized with difficulty: {task_name}")
-        
+        obs = env.reset(difficulty=task_name, seed=seed, horizon=MAX_STEPS)
+        print(f"Task initialized with difficulty: {task_name}, seed: {seed}")
+
         for step in range(1, MAX_STEPS + 1):
             user_prompt = build_user_prompt(step, obs)
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ]
-            
+
             try:
                 completion = client.chat.completions.create(
                     model=MODEL_NAME,
@@ -116,17 +100,21 @@ def run_task(client: OpenAI, task_name: str) -> float:
             except Exception as exc:
                 print(f"Model request failed ({exc}). Using fallback action.")
                 response_text = ""
-                
+
             action = parse_model_action(response_text)
             obs = env.step(action)
-            
+
             if obs.done:
                 print("Episode complete early.")
                 break
-                
+
         state = env.state
         score = grade_episode(state, task_name)
-        print(f"Task '{task_name}' finished. Fill Rate: {state.fill_rate:.2f}, Cost: {state.total_cost:.2f}")
+        print(
+            f"Task '{task_name}' finished. "
+            f"Fill Rate: {state.fill_rate:.2f}, Cost: {state.total_cost:.2f}, "
+            f"Carbon: {state.carbon_footprint:.2f}"
+        )
         print(f"Task Score (0.0-1.0): {score:.4f}")
         return score
 

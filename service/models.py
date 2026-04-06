@@ -10,9 +10,8 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, Optional
 
+from openenv.core.env_server import Action, Observation, State
 from pydantic import Field, field_validator
-
-from ._compat import Action, Observation, State
 
 
 DifficultyName = Literal["easy", "medium", "mvp", "hard"]

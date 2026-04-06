@@ -6,44 +6,27 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from service.models import AgentAction
-from service.server.hackathon_environment import SupplyChainEnv
+from service.hackathon_environment import SupplyChainEnv
 
 def test_multi_product():
     env = SupplyChainEnv()
     obs = env.reset(difficulty="mvp")
-    
-    print(f"Num Products: {env._num_products}")
-    print(f"Inventory Levels (flattened): {obs.inventory_levels}")
-    print(f"Initial Backlog (flattened): {obs.customer_backlog}")
-    
-    if len(obs.inventory_levels) == 9:
-        print("[PASS] Inventory levels have length 9 (3 echelons * 3 products).")
-    else:
-        print(f"[FAIL] Inventory levels have length {len(obs.inventory_levels)}, expected 9.")
 
-    if len(obs.customer_backlog) == 3:
-        print("[PASS] Customer backlog has length 3 (1 per product).")
-    else:
-        print(f"[FAIL] Customer backlog has length {len(obs.customer_backlog)}, expected 3.")
+    num_nodes = env._num_nodes       # 7
+    num_products = env._num_products  # 3
+    num_slots = num_nodes * num_products  # 21
 
-    # Take a step with 9 order quantities
-    orders = [5.0] * 9
-    action = AgentAction(order_quantities=orders)
+    assert len(obs.inventory_levels) == num_slots
+    assert len(obs.customer_backlog) == 4 * num_products  # 4 retailers * 3 products
+
+    action = AgentAction(order_quantities=[5.0] * num_slots, shipping_methods=[0] * num_slots)
     obs = env.step(action)
-    
-    print(f"New Day: {obs.day}")
-    print(f"Reward: {obs.reward}")
-    print(f"Current Demands (from metadata): {obs.metadata.get('current_demands')}")
-    
-    if obs.metadata.get("current_demands") and len(obs.metadata.get("current_demands")) == 3:
-        print("[PASS] Current demands in metadata has length 3.")
-    else:
-        print("[FAIL] Current demands in metadata is missing or has wrong length.")
 
-    if len(obs.state_vector) == 54: # 3 echelons * 3 products * 6 features
-        print("[PASS] State vector has length 54.")
-    else:
-        print(f"[FAIL] State vector has length {len(obs.state_vector)}, expected 54.")
+    assert obs.day == 1
+    assert obs.reward is not None
+    demands = obs.metadata.get("current_demands")
+    assert demands is not None and len(demands) == 4 * num_products
+    assert len(obs.state_vector) == num_slots * 6
 
 if __name__ == "__main__":
     test_multi_product()

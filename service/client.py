@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from ._compat import EnvClient, StepResult
+from openenv.core.client_types import StepResult
+from openenv.core.env_client import EnvClient
+
 from .models import AgentAction, AgentObservation, SupplyChainState
 
 

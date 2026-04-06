@@ -23,9 +23,9 @@ This package mirrors the layout described in the official **OpenEnv** walkthroug
 | Tutorial idea | In this repo |
 |---------------|----------------|
 | Type-safe **Action** / **Observation** / **State** (Pydantic models) | `service/models.py` — `AgentAction`, `AgentObservation`, `SupplyChainState` |
-| **Environment** — `reset`, `step`, `state` | `service/server/hackathon_environment.py` — `SupplyChainEnv` |
+| **Environment** — `reset`, `step`, `state` | `service/hackathon_environment.py` — `SupplyChainEnv` |
 | **EnvClient** — HTTP `reset` / `step` / `state` | `service/client.py` — `SupplyChainClient` |
-| FastAPI server wiring | `service/server/app.py` — `create_app(SupplyChainEnv, …)` |
+| FastAPI server wiring | `server/app.py` — `create_app(SupplyChainEnv, …)` |
 
 Run the tutorial notebook top-to-bottom for the client/server mental model (REST-style envs, isolation, typing); then use this repo for the supply-chain **domain** on the same APIs.
 
@@ -46,7 +46,7 @@ Each **episode** is a sequence of **days** (steps), up to a **horizon** (default
 9. **Reward terms** are computed from holding, stockouts/backlogs, transport, carbon, and same-day fill rate; the step **reward** is clipped to **[-1, 1]**.
 10. The server returns an **observation** (inventories, in-transit, forecasts, masks, events, etc.) plus **reward** and **done**.
 
-So the “product” is both the **simulator** (`SupplyChainEnv`) and the **remote API** (`service.server.app`) that lets any client train or evaluate policies against it.
+So the “product” is both the **simulator** (`SupplyChainEnv`) and the **remote API** (`server.app`) that lets any client train or evaluate policies against it.
 
 ---
 
@@ -99,7 +99,7 @@ The environment is **agnostic**: it only requires valid non-negative orders and 
 - Retailers **5, 6** ← warehouse **B** (node 2)  
 - Warehouses **1, 2** ← factory **0**
 
-**Products:** three SKUs with different demand scales (see `_sample_customer_demand` in `server/hackathon_environment.py`).
+**Products:** three SKUs with different demand scales (see `_sample_customer_demand` in `hackathon_environment.py`).
 
 ### 4.2 Action layout (21 + 21)
 
@@ -235,7 +235,7 @@ Imports use the package name **`service`**. The `service/` folder is the package
 ```bash
 cd /path/to/parent-of-service    # e.g. your Meta repo root that contains service/
 export PYTHONPATH="$PWD"
-uvicorn service.server.app:app --reload --host 0.0.0.0 --port 8000
+uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 **Option B — Editable install from `service/`**
@@ -243,7 +243,7 @@ uvicorn service.server.app:app --reload --host 0.0.0.0 --port 8000
 ```bash
 cd /path/to/service
 pip install -e ".[dev]"    # or: uv pip install -e ".[dev]"
-uvicorn service.server.app:app --reload --host 0.0.0.0 --port 8000
+uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Then open:
@@ -255,24 +255,18 @@ Then open:
 
 ```bash
 cd /path/to/service
-PYTHONPATH=.. python -m service.server.app
+PYTHONPATH=.. python -m server.app
 ```
 
 (Here `..` is the parent directory that contains the `service` package folder.)
 
 ### 7.3 Docker
 
-From `service/`:
+From repo root (parent of `service/`):
 
 ```bash
-docker build -t service-env:latest -f server/Dockerfile .
+docker build -t service-env:latest -f Dockerfile .
 docker run --rm -p 8000:8000 service-env:latest
-```
-
-From repo root:
-
-```bash
-docker build -t service-env:latest -f service/server/Dockerfile service
 ```
 
 ### 7.4 Client example (HTTP)
@@ -331,7 +325,7 @@ Instantiate `SupplyChainEnv` and call `reset` / `step` (fast, good for unit logi
 ```bash
 cd /path/to/parent-of-service
 PYTHONPATH=. python -c "
-from service.server.hackathon_environment import SupplyChainEnv
+from service.hackathon_environment import SupplyChainEnv
 from service.models import AgentAction
 
 env = SupplyChainEnv()
@@ -399,25 +393,7 @@ Not all `test_*.py` files may be strict pytest modules; prefer **named scripts**
 
 ## 10. Project structure
 
-```text
-service/
-├── openenv.yaml              # OpenEnv manifest (HF / CLI)
-├── pyproject.toml            # Package metadata, openenv-core dep
-├── uv.lock                   # Locked deps (optional but recommended)
-├── README.md                 # This file
-├── __init__.py
-├── _compat.py                # OpenEnv types / app factory
-├── client.py                 # HTTP client (SupplyChainClient)
-├── models.py                 # Pydantic action/observation/state
-├── test_*.py                 # Diagnostics / informal tests
-├── test/                     # Combined Jupyter notebook diagnostics
-├── train/                    # OpenEnv-native PyTorch RL entrypoints + obs/action helpers
-└── server/
-    ├── app.py                # FastAPI app (create_app)
-    ├── hackathon_environment.py  # Core simulation + reward
-    ├── Dockerfile
-    └── requirements.txt
-```
+See the repo-root `README.md` for the full tree (`Dockerfile`, `openenv.yaml`, `server/app.py`, `service/`, …).
 
 ---
 
