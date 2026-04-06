@@ -1,0 +1,6 @@
+spec_version: 1
+name: hackathon-supply-chain
+type: space
+runtime: fastapi
+app: hackathon.server.app:app
+port: 8000
