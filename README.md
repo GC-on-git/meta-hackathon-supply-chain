@@ -24,9 +24,9 @@ This package mirrors the layout described in the official **OpenEnv** walkthroug
 | Tutorial idea | In this repo |
 |---------------|----------------|
 | Type-safe **Action** / **Observation** / **State** (Pydantic models) | `service/models.py` — `AgentAction`, `AgentObservation`, `SupplyChainState` |
-| **Environment** — `reset`, `step`, `state` | `service/server/hackathon_environment.py` — `SupplyChainEnv` |
+| **Environment** — `reset`, `step`, `state` | `service/hackathon_environment.py` — `SupplyChainEnv` |
 | **EnvClient** — HTTP `reset` / `step` / `state` | `service/client.py` — `SupplyChainClient` |
-| FastAPI server wiring | `service/server/app.py` — `create_app(SupplyChainEnv, …)` |
+| FastAPI server wiring | `server/app.py` — `create_app(SupplyChainEnv, …)` (ASGI: `server.app:app` or repo-root shim `app:app`) |
 
 Run the tutorial notebook top-to-bottom for the client/server mental model (REST-style envs, isolation, typing); then use this repo for the supply-chain **domain** on the same APIs.
 
@@ -47,7 +47,7 @@ Each **episode** is a sequence of **days** (steps), up to a **horizon** (default
 9. **Reward terms** are computed from holding, stockouts/backlogs, transport, carbon, and same-day fill rate; the step **reward** is clipped to **[-1, 1]**.
 10. The server returns an **observation** (inventories, in-transit, forecasts, masks, events, etc.) plus **reward** and **done**.
 
-So the “product” is both the **simulator** (`SupplyChainEnv`) and the **remote API** (`service.server.app`) that lets any client train or evaluate policies against it.
+So the “product” is both the **simulator** (`SupplyChainEnv`) and the **remote API** served by **`server.app:app`** (or **`app:app`** via the repo-root `app.py` shim) that lets any client train or evaluate policies against it.
 
 ---
 
@@ -100,7 +100,7 @@ The environment is **agnostic**: it only requires valid non-negative orders and 
 - Retailers **5, 6** ← warehouse **B** (node 2)  
 - Warehouses **1, 2** ← factory **0**
 
-**Products:** three SKUs with different demand scales (see `_sample_customer_demand` in `server/hackathon_environment.py`).
+**Products:** three SKUs with different demand scales (see `_sample_customer_demand` in `service/hackathon_environment.py`).
 
 ### 4.2 Action layout (21 + 21)
 
@@ -229,22 +229,25 @@ This environment abstracts that into daily decisions, stochastic demand, lead ti
 
 ### 7.1 Python path and installs
 
-Imports use the package name **`service`**. The `service/` folder is the package root (see `service/pyproject.toml`). Typical setups:
+The **HTTP server** lives at **`server/app.py`** (top-level `server/` package next to `service/`). The **`service`** package holds the simulator and client (see `service/pyproject.toml`). Put the **repository root** on `PYTHONPATH` so both `server` and `service` resolve.
 
-**Option A — Repository root on `PYTHONPATH` (no install)**
+**Option A — Repository root on `PYTHONPATH` (recommended, no install)**
 
 ```bash
-cd /path/to/parent-of-service    # e.g. your Meta repo root that contains service/
+cd /path/to/repo-root    # directory that contains server/, service/, app.py, pyproject.toml
 export PYTHONPATH="$PWD"
-uvicorn service.server.app:app --reload --host 0.0.0.0 --port 8000
+uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
+# equivalent: uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Option B — Editable install from `service/`**
+**Option B — Editable install of `service/` plus repo root for the server**
 
 ```bash
 cd /path/to/service
 pip install -e ".[dev]"    # or: uv pip install -e ".[dev]"
-uvicorn service.server.app:app --reload --host 0.0.0.0 --port 8000
+cd ..                      # back to repo root
+export PYTHONPATH="$PWD"
+uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Then open:
@@ -254,27 +257,23 @@ Then open:
 
 ### 7.2 Run module entrypoint
 
-```bash
-cd /path/to/service
-PYTHONPATH=.. python -m service.server.app
-```
+From the **repository root** (so `server` is importable):
 
-(Here `..` is the parent directory that contains the `service` package folder.)
+```bash
+cd /path/to/repo-root
+PYTHONPATH=. python -m server.app
+```
 
 ### 7.3 Docker
 
-From `service/`:
+The **`Dockerfile`** is at the **repository root**. From repo root:
 
 ```bash
-docker build -t service-env:latest -f server/Dockerfile .
+docker build -t service-env:latest .
 docker run --rm -p 8000:8000 service-env:latest
 ```
 
-From repo root:
-
-```bash
-docker build -t service-env:latest -f service/server/Dockerfile service
-```
+The image runs **`uvicorn app:app`** (see root `app.py` and `Dockerfile`).
 
 ### 7.4 Client example (HTTP)
 
@@ -332,7 +331,7 @@ Instantiate `SupplyChainEnv` and call `reset` / `step` (fast, good for unit logi
 ```bash
 cd /path/to/parent-of-service
 PYTHONPATH=. python -c "
-from service.server.hackathon_environment import SupplyChainEnv
+from service.hackathon_environment import SupplyChainEnv
 from service.models import AgentAction
 
 env = SupplyChainEnv()

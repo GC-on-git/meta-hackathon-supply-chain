@@ -8,6 +8,7 @@ description = "Multi-echelon supply chain environment for OpenEnv"
 requires-python = ">=3.10"
 dependencies = [
     "openenv-core[core]>=0.2.2",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.scripts]
