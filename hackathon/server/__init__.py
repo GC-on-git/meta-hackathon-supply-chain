@@ -4,8 +4,8 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Hackathon environment server components."""
+"""Supply chain environment server components."""
 
-from .hackathon_environment import HackathonEnvironment
+from .hackathon_environment import SupplyChainEnv
 
-__all__ = ["HackathonEnvironment"]
+__all__ = ["SupplyChainEnv"]

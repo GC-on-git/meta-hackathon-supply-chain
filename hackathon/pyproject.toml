@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "openenv-hackathon"
 version = "0.1.0"
-description = "Hackathon environment for OpenEnv"
+description = "Multi-echelon supply chain environment for OpenEnv"
 requires-python = ">=3.10"
 dependencies = [
     # Core OpenEnv runtime (provides FastAPI server + HTTP client types)
@@ -33,6 +33,10 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=4.0.0",
 ]
+train = [
+    "numpy>=1.24.0",
+    "torch>=2.0.0",
+]
 
 [project.scripts]
 # Server entry point - enables running via: uv run --project . server
@@ -41,5 +45,5 @@ server = "hackathon.server.app:main"
 
 [tool.setuptools]
 include-package-data = true
-packages = ["hackathon", "hackathon.server"]
-package-dir = { "hackathon" = ".", "hackathon.server" = "server" }
+packages = ["hackathon", "hackathon.server", "hackathon.train"]
+package-dir = { "hackathon" = ".", "hackathon.server" = "server", "hackathon.train" = "train" }

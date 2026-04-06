@@ -5,9 +5,9 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-FastAPI application for the Hackathon Environment.
+FastAPI application for the supply chain environment.
 
-This module creates an HTTP server that exposes the HackathonEnvironment
+This module creates an HTTP server that exposes SupplyChainEnv
 over HTTP and WebSocket endpoints, compatible with EnvClient.
 
 Endpoints:
@@ -29,13 +29,13 @@ Usage:
 """
 
 from hackathon._compat import create_app
-from hackathon.models import HackathonAction, HackathonObservation
-from hackathon.server.hackathon_environment import HackathonEnvironment
+from hackathon.models import AgentAction, AgentObservation
+from hackathon.server.hackathon_environment import SupplyChainEnv
 
 app = create_app(
-    HackathonEnvironment,
-    HackathonAction,
-    HackathonObservation,
+    SupplyChainEnv,
+    AgentAction,
+    AgentObservation,
     env_name="hackathon",
 )
 

@@ -4,14 +4,15 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Hackathon Environment."""
+"""Supply chain hackathon environment package."""
 
-from .client import HackathonEnv
-from .models import HackathonAction, HackathonObservation, HackathonState
+from .client import SupplyChainClient, SupplyChainInventoryEnv
+from .models import AgentAction, AgentObservation, SupplyChainState
 
 __all__ = [
-    "HackathonAction",
-    "HackathonObservation",
-    "HackathonState",
-    "HackathonEnv",
+    "AgentAction",
+    "AgentObservation",
+    "SupplyChainClient",
+    "SupplyChainInventoryEnv",
+    "SupplyChainState",
 ]
