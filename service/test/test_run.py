@@ -5,8 +5,8 @@ import asyncio
 # Add the project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from hackathon.client import SupplyChainClient
-from hackathon.models import AgentAction
+from service.client import SupplyChainClient
+from service.models import AgentAction
 
 async def main():
     # Connect to your running server

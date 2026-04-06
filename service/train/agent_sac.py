@@ -12,7 +12,7 @@ Replay buffer + twin Q-networks — no Gymnasium / Stable-Baselines3.
 
 Example::
 
-    PYTHONPATH=. python -m hackathon.train.agent_sac --difficulty easy
+    PYTHONPATH=. python -m service.train.agent_sac --difficulty easy
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from typing import Deque
 
 import numpy as np
 
-from hackathon.server.hackathon_environment import SupplyChainEnv
-from hackathon.train import (
+from service.server.hackathon_environment import SupplyChainEnv
+from service.train import (
     ACTION_DIM,
     STATE_VECTOR_DIM,
     observation_to_vector,

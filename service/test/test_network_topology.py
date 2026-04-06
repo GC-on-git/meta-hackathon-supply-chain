@@ -5,8 +5,8 @@ import os
 # Add the project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from hackathon.models import AgentAction
-from hackathon.server.hackathon_environment import SupplyChainEnv
+from service.models import AgentAction
+from service.server.hackathon_environment import SupplyChainEnv
 
 def test_network_topology():
     env = SupplyChainEnv()

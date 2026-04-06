@@ -9,7 +9,7 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openenv-hackathon"
+name = "openenv-service"
 version = "0.1.0"
 description = "Multi-echelon supply chain environment for OpenEnv"
 requires-python = ">=3.10"
@@ -40,10 +40,10 @@ train = [
 
 [project.scripts]
 # Server entry point - enables running via: uv run --project . server
-# or: python -m hackathon.server.app
-server = "hackathon.server.app:main"
+# or: python -m service.server.app
+server = "service.server.app:main"
 
 [tool.setuptools]
 include-package-data = true
-packages = ["hackathon", "hackathon.server", "hackathon.train"]
-package-dir = { "hackathon" = ".", "hackathon.server" = "server", "hackathon.train" = "train" }
+packages = ["service", "service.server", "service.train"]
+package-dir = { "service" = ".", "service.server" = "server", "service.train" = "train" }

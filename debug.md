@@ -37,7 +37,7 @@ flowchart LR
 
 ### 1.2 Server request path (when `openenv-core` is installed)
 
-1. **Uvicorn** loads `hackathon.server.app:app` (or `server.app:app` in some Docker layouts).
+1. **Uvicorn** loads `service.server.app:app` (or `server.app:app` in some Docker layouts).
 2. **`create_app(SupplyChainEnv, AgentAction, AgentObservation, ...)`** (from `openenv.core...`) constructs a **singleton** environment instance and registers routes (`/reset`, `/step`, `/state`, `/schema`, `/ws`, etc.—exact set depends on OpenEnv version).
 3. **`POST /reset`** parses JSON body → `SupplyChainEnv.reset(**kwargs)` → returns an observation (Pydantic `model_dump()` to JSON).
 4. **`POST /step`** parses `action` dict → `AgentAction(**action)` → `SupplyChainEnv.step(action)` → JSON with `observation`, `reward`, `done` (shape may be nested depending on server adapter).
@@ -81,7 +81,7 @@ Paths are relative to the `hackathon/` package directory unless noted.
 
 ### 2.2 `pyproject.toml`
 
-- **Role:** Package metadata, dependency on `openenv-core[core]`, optional `dev` (`pytest`) and `train` (`torch`, `numpy`) extras, setuptools `package-dir` mapping for `hackathon`, `hackathon.server`, `hackathon.train`.
+- **Role:** Package metadata, dependency on `openenv-core[core]`, optional `dev` (`pytest`) and `train` (`torch`, `numpy`) extras, setuptools `package-dir` mapping for `service`, `service.server`, `service.train`.
 - **Functions:** None.
 
 ### 2.3 `uv.lock`
@@ -270,7 +270,7 @@ Optional **training** stack (install `pip install -e ".[train]"` from `hackathon
 
 ### 3.8 Docker / PYTHONPATH pitfalls
 
-- Local dev often uses `hackathon.server.app` from repo root; Docker may use `server.app` with `PYTHONPATH=/app/env`. Import errors usually mean **wrong cwd or PYTHONPATH** relative to `pyproject` `package-dir`.
+- Local dev often uses `service.server.app` from repo root; Docker may use `server.app` with `PYTHONPATH=/app/env`. Import errors usually mean **wrong cwd or PYTHONPATH** relative to `pyproject` `package-dir`.
 
 ### 3.9 Reward scale and learning stability
 

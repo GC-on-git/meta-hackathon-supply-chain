@@ -11,7 +11,7 @@ Collects rollouts via ``reset`` / ``step(AgentAction)`` — no Gymnasium / Stabl
 
 Example::
 
-    PYTHONPATH=. python -m hackathon.train.agent_ppo --difficulty easy
+    PYTHONPATH=. python -m service.train.agent_ppo --difficulty easy
 """
 
 from __future__ import annotations
@@ -21,13 +21,13 @@ from typing import List, Tuple
 
 import numpy as np
 
-from hackathon.train import (
+from service.train import (
     ACTION_DIM,
     STATE_VECTOR_DIM,
     observation_to_vector,
     vector_to_agent_action,
 )
-from hackathon.server.hackathon_environment import SupplyChainEnv
+from service.server.hackathon_environment import SupplyChainEnv
 
 
 def main() -> None:

@@ -1,5 +1,5 @@
 spec_version: 1
-name: hackathon
+name: service
 type: space
 runtime: fastapi
 app: server.app:app

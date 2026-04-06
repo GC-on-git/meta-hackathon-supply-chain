@@ -14,8 +14,8 @@ from random import Random
 from typing import Any, Optional
 from uuid import uuid4
 
-from hackathon._compat import Environment
-from hackathon.models import AgentAction, AgentObservation, SupplyChainState
+from service._compat import Environment
+from service.models import AgentAction, AgentObservation, SupplyChainState
 
 
 ECHELON_NAMES = ["factory", "warehouse_a", "warehouse_b", "retailer_1", "retailer_2", "retailer_3", "retailer_4"]

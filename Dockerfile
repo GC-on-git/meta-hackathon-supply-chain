@@ -9,12 +9,12 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 ARG BUILD_MODE=in-repo
-ARG ENV_NAME=hackathon
+ARG ENV_NAME=service
 
 # Copy environment code from root
 COPY . /app/env
 
-WORKDIR /app/env/hackathon
+WORKDIR /app/env/service
 
 # Ensure uv is available
 RUN if ! command -v uv >/dev/null 2>&1; then \
@@ -38,7 +38,7 @@ FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
-COPY --from=builder /app/env/hackathon/.venv /app/.venv
+COPY --from=builder /app/env/service/.venv /app/.venv
 COPY --from=builder /app/env /app/env
 
 ENV PATH="/app/.venv/bin:$PATH"
@@ -48,4 +48,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Run the FastAPI server
-CMD ["sh", "-c", "cd /app/env/hackathon && uvicorn server.app:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "cd /app/env/service && uvicorn server.app:app --host 0.0.0.0 --port 8000"]

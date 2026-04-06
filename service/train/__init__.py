@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from hackathon.models import AgentAction, AgentObservation
-from hackathon.server.hackathon_environment import SupplyChainEnv
+from service.models import AgentAction, AgentObservation
+from service.server.hackathon_environment import SupplyChainEnv
 
 # Matches current 7×3×6 feature layout in `_build_observation`.
 STATE_VECTOR_DIM = 126

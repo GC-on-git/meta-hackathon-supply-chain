@@ -19,24 +19,24 @@ Endpoints:
 
 Usage:
     # Development (with auto-reload):
-    uvicorn hackathon.server.app:app --reload --host 0.0.0.0 --port 8000
+    uvicorn service.server.app:app --reload --host 0.0.0.0 --port 8000
 
     # Production:
     uvicorn server.app:app --host 0.0.0.0 --port 8000 --workers 4
 
     # Or run directly:
-    python -m hackathon.server.app
+    python -m service.server.app
 """
 
-from hackathon._compat import create_app
-from hackathon.models import AgentAction, AgentObservation
-from hackathon.server.hackathon_environment import SupplyChainEnv
+from service._compat import create_app
+from service.models import AgentAction, AgentObservation
+from service.server.hackathon_environment import SupplyChainEnv
 
 app = create_app(
     SupplyChainEnv,
     AgentAction,
     AgentObservation,
-    env_name="hackathon",
+    env_name="service",
 )
 
 @app.get("/")

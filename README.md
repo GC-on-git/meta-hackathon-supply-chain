@@ -23,10 +23,10 @@ This package mirrors the layout described in the official **OpenEnv** walkthroug
 
 | Tutorial idea | In this repo |
 |---------------|----------------|
-| Type-safe **Action** / **Observation** / **State** (Pydantic models) | `hackathon/models.py` — `AgentAction`, `AgentObservation`, `SupplyChainState` |
-| **Environment** — `reset`, `step`, `state` | `hackathon/server/hackathon_environment.py` — `SupplyChainEnv` |
-| **EnvClient** — HTTP `reset` / `step` / `state` | `hackathon/client.py` — `SupplyChainClient` |
-| FastAPI server wiring | `hackathon/server/app.py` — `create_app(SupplyChainEnv, …)` |
+| Type-safe **Action** / **Observation** / **State** (Pydantic models) | `service/models.py` — `AgentAction`, `AgentObservation`, `SupplyChainState` |
+| **Environment** — `reset`, `step`, `state` | `service/server/hackathon_environment.py` — `SupplyChainEnv` |
+| **EnvClient** — HTTP `reset` / `step` / `state` | `service/client.py` — `SupplyChainClient` |
+| FastAPI server wiring | `service/server/app.py` — `create_app(SupplyChainEnv, …)` |
 
 Run the tutorial notebook top-to-bottom for the client/server mental model (REST-style envs, isolation, typing); then use this repo for the supply-chain **domain** on the same APIs.
 
@@ -47,7 +47,7 @@ Each **episode** is a sequence of **days** (steps), up to a **horizon** (default
 9. **Reward terms** are computed from holding, stockouts/backlogs, transport, carbon, and same-day fill rate; the step **reward** is clipped to **[-1, 1]**.
 10. The server returns an **observation** (inventories, in-transit, forecasts, masks, events, etc.) plus **reward** and **done**.
 
-So the “product” is both the **simulator** (`SupplyChainEnv`) and the **remote API** (`hackathon.server.app`) that lets any client train or evaluate policies against it.
+So the “product” is both the **simulator** (`SupplyChainEnv`) and the **remote API** (`service.server.app`) that lets any client train or evaluate policies against it.
 
 ---
 
@@ -229,22 +229,22 @@ This environment abstracts that into daily decisions, stochastic demand, lead ti
 
 ### 7.1 Python path and installs
 
-Imports use the package name **`hackathon`**. The `hackathon/` folder is the package root (see `pyproject.toml`). Typical setups:
+Imports use the package name **`service`**. The `service/` folder is the package root (see `service/pyproject.toml`). Typical setups:
 
 **Option A — Repository root on `PYTHONPATH` (no install)**
 
 ```bash
-cd /path/to/parent-of-hackathon    # e.g. your Meta repo root that contains hackathon/
+cd /path/to/parent-of-service    # e.g. your Meta repo root that contains service/
 export PYTHONPATH="$PWD"
-uvicorn hackathon.server.app:app --reload --host 0.0.0.0 --port 8000
+uvicorn service.server.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Option B — Editable install from `hackathon/`**
+**Option B — Editable install from `service/`**
 
 ```bash
-cd /path/to/hackathon
+cd /path/to/service
 pip install -e ".[dev]"    # or: uv pip install -e ".[dev]"
-uvicorn hackathon.server.app:app --reload --host 0.0.0.0 --port 8000
+uvicorn service.server.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Then open:
@@ -255,25 +255,25 @@ Then open:
 ### 7.2 Run module entrypoint
 
 ```bash
-cd /path/to/hackathon
-PYTHONPATH=.. python -m hackathon.server.app
+cd /path/to/service
+PYTHONPATH=.. python -m service.server.app
 ```
 
-(Here `..` is the parent directory that contains the `hackathon` package folder.)
+(Here `..` is the parent directory that contains the `service` package folder.)
 
 ### 7.3 Docker
 
-From `hackathon/`:
+From `service/`:
 
 ```bash
-docker build -t hackathon-env:latest -f server/Dockerfile .
-docker run --rm -p 8000:8000 hackathon-env:latest
+docker build -t service-env:latest -f server/Dockerfile .
+docker run --rm -p 8000:8000 service-env:latest
 ```
 
 From repo root:
 
 ```bash
-docker build -t hackathon-env:latest -f hackathon/server/Dockerfile hackathon
+docker build -t service-env:latest -f service/server/Dockerfile service
 ```
 
 ### 7.4 Client example (HTTP)
@@ -281,8 +281,8 @@ docker build -t hackathon-env:latest -f hackathon/server/Dockerfile hackathon
 Start the server, then:
 
 ```python
-from hackathon.client import SupplyChainClient
-from hackathon.models import AgentAction
+from service.client import SupplyChainClient
+from service.models import AgentAction
 
 env = SupplyChainClient(base_url="http://localhost:8000")
 
@@ -304,8 +304,8 @@ print(step.reward, step.observation.fill_rate, step.observation.active_events)
 With the server running:
 
 ```bash
-cd /path/to/parent-of-hackathon
-python hackathon/test_run.py
+cd /path/to/parent-of-service
+python service/test/test_run.py
 ```
 
 (`test_run.py` adds the repo root to `sys.path` and uses `asyncio` if the client returns coroutines.)
@@ -330,10 +330,10 @@ See the [OpenEnv](https://github.com/meta-pytorch/OpenEnv) repo for login and CL
 Instantiate `SupplyChainEnv` and call `reset` / `step` (fast, good for unit logic):
 
 ```bash
-cd /path/to/parent-of-hackathon
+cd /path/to/parent-of-service
 PYTHONPATH=. python -c "
-from hackathon.server.hackathon_environment import SupplyChainEnv
-from hackathon.models import AgentAction
+from service.server.hackathon_environment import SupplyChainEnv
+from service.models import AgentAction
 
 env = SupplyChainEnv()
 o = env.reset(difficulty='mvp', seed=1)
@@ -343,14 +343,14 @@ print(o2.reward, o2.day, len(o2.inventory_levels))
 "
 ```
 
-### 8.2 Diagnostic scripts in `hackathon/`
+### 8.2 Diagnostic scripts in `service/`
 
-For a **single combined notebook** with verbose `DEBUG` output, open `hackathon/test/supply_chain_tests.ipynb` (run setup, then definitions, then the “Run all in-process” cell).
+For a **single combined notebook** with verbose `DEBUG` output, open `service/test/supply_chain_tests.ipynb` (run setup, then definitions, then the “Run all in-process” cell).
 
 Scripts such as `test_news_events.py`, `test_stochastic_lt.py`, `test_sustainability.py`, `test_variable_costs.py`, and `test_network_topology.py` mutate or inspect the env to print **PASS/FAIL** style checks. Run from repo root:
 
 ```bash
-PYTHONPATH=. python hackathon/test_news_events.py
+PYTHONPATH=. python service/test/test_news_events.py
 ```
 
 Some scripts were authored during iterative development; if a check prints **FAIL**, compare the message to the current 7×3 layout and update the expectation (e.g. lengths **21** and **12**).
@@ -360,7 +360,7 @@ Some scripts were authored during iterative development; if a check prints **FAI
 Optional dev dependency: `pip install -e ".[dev]"` then:
 
 ```bash
-cd /path/to/hackathon
+cd /path/to/service
 pytest -q
 ```
 
@@ -401,7 +401,7 @@ Not all `test_*.py` files may be strict pytest modules; prefer **named scripts**
 ## 10. Project structure
 
 ```text
-hackathon/
+service/
 ├── openenv.yaml              # OpenEnv manifest (HF / CLI)
 ├── pyproject.toml            # Package metadata, openenv-core dep
 ├── uv.lock                   # Locked deps (optional but recommended)
@@ -464,7 +464,7 @@ This package does **not** ship a pretrained network. Training scripts use the **
 
 ### 11.1 Install training extras
 
-From the `hackathon/` directory (or install the package editable from repo root):
+From the `service/` directory (or install the package editable from repo root):
 
 ```bash
 pip install -e ".[train]"
@@ -481,7 +481,7 @@ That pulls in **PyTorch** and **NumPy** for the reference trainers. The core env
 | `vector_to_agent_action(vec, max_order_qty)` | Maps **42** floats in **[0, 1]** to `AgentAction`: first **21** × `max_order_qty` → orders; last **21** threshold **0.5** → shipping (0 standard / 1 express). |
 | `new_supply_chain_env(...)` | `SupplyChainEnv` + first `reset` (optional helper). |
 
-Run with repo root on `PYTHONPATH` (parent of the `hackathon` folder).
+Run with repo root on `PYTHONPATH` (parent of the `service` folder).
 
 ### 11.3 Algorithm entrypoints (`agent_{algorithm}.py`)
 
@@ -498,10 +498,10 @@ Each script is **PyTorch** only and saves a **`.pt`** checkpoint (not Stable-Bas
 Examples:
 
 ```bash
-cd /path/to/parent-of-hackathon
-PYTHONPATH=. python -m hackathon.train.agent_ppo --total-steps 100_000 --difficulty easy --horizon 120
-PYTHONPATH=. python -m hackathon.train.agent_sac --total-steps 80_000 --difficulty easy
-PYTHONPATH=. python -m hackathon.train.agent_reinforce --episodes 500 --difficulty easy
+cd /path/to/parent-of-service
+PYTHONPATH=. python -m service.train.agent_ppo --total-steps 100_000 --difficulty easy --horizon 120
+PYTHONPATH=. python -m service.train.agent_sac --total-steps 80_000 --difficulty easy
+PYTHONPATH=. python -m service.train.agent_reinforce --episodes 500 --difficulty easy
 ```
 
 Training is **stochastic**; pass `--seed` where supported. For harder presets (`mvp`, `hard`), expect longer runs and possible reward saturation (see `debug.md` §3.9).

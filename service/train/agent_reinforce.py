@@ -11,7 +11,7 @@ Rollouts use ``reset`` / ``step(AgentAction)`` and ``observation_to_vector`` —
 
 Example::
 
-    PYTHONPATH=. python -m hackathon.train.agent_reinforce --episodes 500 --difficulty easy
+    PYTHONPATH=. python -m service.train.agent_reinforce --episodes 500 --difficulty easy
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import List, Tuple
 
 import numpy as np
 
-from hackathon.train import (
+from service.train import (
     ACTION_DIM,
     STATE_VECTOR_DIM,
     new_supply_chain_env,
