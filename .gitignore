@@ -222,3 +222,7 @@ meta/models/*.pth
 meta/models/*.ckpt
 meta/models/*.onnx
 meta/models/*.safetensors
+
+# Local-only docs (keep out of VCS)
+submission.md
+debug.md
