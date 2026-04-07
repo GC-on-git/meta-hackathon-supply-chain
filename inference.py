@@ -15,9 +15,13 @@ from service.models import AgentAction
 
 load_dotenv()
 
+# Defaults only for URL/model; the eval harness provides HF_TOKEN.
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
+
+# Keep the public name API_KEY (used by OpenAI-compatible clients), but source it
+# primarily from HF_TOKEN as per the hackathon harness.
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 MAX_STEPS = 30
 TEMPERATURE = 0.2
 MAX_TOKENS = 1000
@@ -247,8 +251,9 @@ def main() -> None:
 
     if not API_KEY:
         print(
-            "Error: HF_TOKEN or API_KEY is not set. "
-            "Add it to your environment or a .env file in the project root.",
+            "Error: API_KEY is not set. "
+            "In the eval harness, this is provided via HF_TOKEN; for local runs set HF_TOKEN or API_KEY "
+            "in the environment or root .env.",
             file=sys.stderr,
         )
         sys.exit(1)
