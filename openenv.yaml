@@ -2,5 +2,5 @@ spec_version: 1
 name: service-supply-chain
 type: space
 runtime: fastapi
-app: service.server.app:app
+app: server.app:app
 port: 8000
