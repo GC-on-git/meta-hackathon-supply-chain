@@ -17,9 +17,22 @@ Example::
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from typing import List, Tuple
 
 import numpy as np
+
+# Allow running as a script (`python service/train/agent_ppo.py`) as well as a module
+# (`python -m service.train.agent_ppo`).
+#
+# When executed as a script, Python sets sys.path[0] to this file's directory
+# (`service/train/`), which prevents `import service` from resolving unless the repo
+# root is on PYTHONPATH.
+if __package__ in (None, ""):
+    _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
 
 from service.train import (
     ACTION_DIM,
@@ -47,6 +60,17 @@ def main() -> None:
     parser.add_argument("--horizon", type=int, default=120)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--save-path", type=str, default="models/ppo_supply_chain.pt")
+    parser.add_argument(
+        "--log-reward-terms",
+        action="store_true",
+        help="Print reward_terms breakdown summaries (debug).",
+    )
+    parser.add_argument(
+        "--log-reward-terms-steps",
+        type=int,
+        default=0,
+        help="If >0, also print the first N steps' reward_terms each rollout (debug).",
+    )
     args = parser.parse_args()
 
     try:
@@ -110,6 +134,7 @@ def main() -> None:
         device: torch.device,
     ) -> tuple:
         obs_l, act_l, rew_l, val_l, logp_l, done_l = [], [], [], [], [], []
+        terms_l = []
         obs_p = env.reset(difficulty=args.difficulty, seed=None, horizon=args.horizon)
         s = observation_to_vector(obs_p)
         for _ in range(rollout_len):
@@ -121,6 +146,8 @@ def main() -> None:
             next_p = env.step(aa)
             r = float(next_p.reward) if next_p.reward is not None else 0.0
             d = float(next_p.done)
+            if args.log_reward_terms:
+                terms_l.append(getattr(next_p, "reward_terms", {}) or {})
             obs_l.append(s)
             act_l.append(a_np)
             rew_l.append(r)
@@ -143,6 +170,7 @@ def main() -> None:
             np.array(logp_l, dtype=np.float32),
             np.array(done_l, dtype=np.float32),
             last_v,
+            terms_l,
         )
 
     def gae_returns(
@@ -180,7 +208,7 @@ def main() -> None:
         if remain <= 0:
             break
         roll = min(args.rollout_len, remain)
-        obs, actions, rewards, values, old_logp, dones, last_v = collect_rollout(env, ac, roll, device)
+        obs, actions, rewards, values, old_logp, dones, last_v, terms_l = collect_rollout(env, ac, roll, device)
         global_step += len(rewards)
         adv, rets = gae_returns(rewards, values, dones, last_v, args.gamma, args.gae_lambda)
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
@@ -209,10 +237,36 @@ def main() -> None:
                 nn.utils.clip_grad_norm_(ac.parameters(), args.max_grad_norm)
                 opt.step()
 
-        print(
+        msg = (
             f"DEBUG PPO: step {global_step:6d}  mean_reward={float(rewards.mean()):.4f}  "
             f"mean_ret={float(rets.mean()):.4f}"
         )
+        if args.log_reward_terms and terms_l:
+            keys = [
+                "holding_cost",
+                "stockout_penalty",
+                "transport_cost",
+                "carbon_penalty",
+                "fill_rate_bonus",
+                "total",
+            ]
+            sums = {k: 0.0 for k in keys}
+            n = 0
+            for t in terms_l:
+                n += 1
+                for k in keys:
+                    v = t.get(k, 0.0)
+                    try:
+                        sums[k] += float(v)
+                    except (TypeError, ValueError):
+                        pass
+            denom = max(n, 1)
+            means = "  ".join(f"{k}={sums[k]/denom:.4f}" for k in keys)
+            msg += f"\nDEBUG PPO: reward_terms_mean  {means}"
+            if args.log_reward_terms_steps and args.log_reward_terms_steps > 0:
+                for i, t in enumerate(terms_l[: int(args.log_reward_terms_steps)]):
+                    msg += f"\nDEBUG PPO: reward_terms_step[{i:03d}] {t}"
+        print(msg)
 
     import os
 

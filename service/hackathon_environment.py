@@ -24,6 +24,17 @@ HOLDING_COSTS = [0.010, 0.015, 0.015, 0.025, 0.025, 0.025, 0.025]
 TRANSPORT_COSTS = [0.008, 0.012, 0.012, 0.015, 0.015, 0.015, 0.015]
 FIXED_ORDER_COSTS = [0.04, 0.06, 0.06, 0.08, 0.08, 0.08, 0.08]
 
+# Per-term divisors for reward shaping: raw penalties are divided by these refs, then averaged
+# so no single cost channel dominates. Refs are tuned from ~p50 of moderate-random policies
+# (uniform order fractions in [0.15, 0.55]) over long rollouts, times ~1.4, so typical
+# normalized terms sit ~0.4–0.8 instead of pegging at ``norm_cap``.
+DEFAULT_REWARD_TERM_REFS = {
+    "holding": 3000.0,
+    "stockout": 9500.0,
+    "transport": 3.5,
+    "carbon": 20.0,
+}
+
 DIFFICULTY_PRESETS = {
     "easy": {
         "active_echelons": [False, False, True],
@@ -36,6 +47,12 @@ DIFFICULTY_PRESETS = {
         "disruption_probability": 0.0,
         "reward_scale": 6.0,
         "max_order_qty": 40.0,
+        "reward_term_refs": {
+            "holding": 100.0,
+            "stockout": 8200.0,
+            "transport": 6.0,
+            "carbon": 22.0,
+        },
     },
     "medium": {
         "active_echelons": [False, True, True],
@@ -48,6 +65,12 @@ DIFFICULTY_PRESETS = {
         "disruption_probability": 0.0,
         "reward_scale": 9.0,
         "max_order_qty": 55.0,
+        "reward_term_refs": {
+            "holding": 2500.0,
+            "stockout": 9000.0,
+            "transport": 3.5,
+            "carbon": 18.0,
+        },
     },
     "mvp": {
         "active_echelons": [True, True, True],
@@ -60,6 +83,12 @@ DIFFICULTY_PRESETS = {
         "disruption_probability": 0.0,
         "reward_scale": 11.0,
         "max_order_qty": 65.0,
+        "reward_term_refs": {
+            "holding": 4300.0,
+            "stockout": 10000.0,
+            "transport": 3.5,
+            "carbon": 23.0,
+        },
     },
     "hard": {
         "active_echelons": [True, True, True],
@@ -72,6 +101,12 @@ DIFFICULTY_PRESETS = {
         "disruption_probability": 0.05,
         "reward_scale": 12.0,
         "max_order_qty": 75.0,
+        "reward_term_refs": {
+            "holding": 2600.0,
+            "stockout": 12500.0,
+            "transport": 4.0,
+            "carbon": 28.0,
+        },
     },
 }
 
@@ -517,10 +552,27 @@ class SupplyChainEnv(Environment):
                 transport_cost += TRANSPORT_COSTS[e_idx] * shipped + FIXED_ORDER_COSTS[e_idx]
         
         transport_cost *= self._fuel_price_multiplier
-        
-        total_cost = holding_cost + stockout_penalty + transport_cost + carbon_penalty
-        reward_scale = float(self._config["reward_scale"]) * (self._num_nodes / 3.0)
-        raw_reward = fill_rate_bonus - (total_cost / reward_scale)
+
+        refs_cfg = self._config.get("reward_term_refs") or {}
+        refs = {**DEFAULT_REWARD_TERM_REFS, **refs_cfg}
+        eps = 1e-9
+        norm_h = holding_cost / max(float(refs["holding"]), eps)
+        norm_s = stockout_penalty / max(float(refs["stockout"]), eps)
+        norm_t = transport_cost / max(float(refs["transport"]), eps)
+        norm_c = carbon_penalty / max(float(refs["carbon"]), eps)
+        # Soft cap so one pathological term does not single-handedly pin the reward
+        norm_cap = 4.0
+        norm_h = min(norm_h, norm_cap)
+        norm_s = min(norm_s, norm_cap)
+        norm_t = min(norm_t, norm_cap)
+        norm_c = min(norm_c, norm_cap)
+        normalized_cost_mean = (norm_h + norm_s + norm_t + norm_c) / 4.0
+
+        # Match old difficulty tuning: larger preset ``reward_scale`` → gentler cost penalty.
+        reward_scale_eff = float(self._config["reward_scale"]) * (self._num_nodes / 3.0)
+        base_reward_scale_eff = 14.0  # easy: 6 * (7/3)
+        cost_multiplier = base_reward_scale_eff / max(reward_scale_eff, eps)
+        raw_reward = fill_rate_bonus - normalized_cost_mean * cost_multiplier
         reward = max(-1.0, min(1.0, raw_reward))
         return {
             "holding_cost": round(holding_cost, 4),
@@ -528,6 +580,11 @@ class SupplyChainEnv(Environment):
             "transport_cost": round(transport_cost, 4),
             "carbon_penalty": round(carbon_penalty, 4),
             "fill_rate_bonus": round(fill_rate_bonus, 4),
+            "norm_holding": round(norm_h, 4),
+            "norm_stockout": round(norm_s, 4),
+            "norm_transport": round(norm_t, 4),
+            "norm_carbon": round(norm_c, 4),
+            "normalized_cost_mean": round(normalized_cost_mean, 4),
             "total": round(reward, 4),
         }
 
