@@ -13,13 +13,29 @@ from openai import OpenAI
 from service.grading import grade_episode
 from service.hackathon_environment import SupplyChainEnv
 from service.models import AgentAction
+from service.tasks import TaskSpec, task_specs
 
-API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
-MODEL_NAME = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
-MAX_STEPS = 30
-TEMPERATURE = 0.2
-MAX_TOKENS = 1000
+load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Configuration — all sourced from environment variables per hackathon spec
+# ---------------------------------------------------------------------------
+API_BASE_URL: str = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+MODEL_NAME: str = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
+
+API_KEY: Optional[str] = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+
+MAX_STEPS: int = 30
+DEFAULT_TEMPERATURE: float = 0.2
+MAX_TOKENS: int = 1024
+LLM_TIMEOUT: float = 60.0
+LLM_MAX_RETRIES: int = 2
+
+TASK_SEEDS: dict[str, int] = {
+    "easy":   int(os.getenv("TASK_SEED_EASY",   "1001")),
+    "medium": int(os.getenv("TASK_SEED_MEDIUM", "2002")),
+    "hard":   int(os.getenv("TASK_SEED_HARD",   "3003")),
+}
 
 # ---------------------------------------------------------------------------
 # Node / topology constants (mirrors hackathon_environment.py for prompt)
@@ -29,33 +45,73 @@ ECHELON_NAMES = [
     "warehouse_a", "warehouse_b",
     "retailer_1", "retailer_2", "retailer_3", "retailer_4",
 ]
-BASE_LEAD_TIMES = [4, 3, 3, 2, 2, 2, 2]  # days
+FALLBACK_LEAD_TIMES = [4, 3, 3, 2, 2, 2, 2]
 
-SYSTEM_PROMPT = textwrap.dedent("""
-    You are an expert supply chain planner for a 7-node, 3-product network.
+# ---------------------------------------------------------------------------
+# System prompt — accurate to env mechanics
+# ---------------------------------------------------------------------------
+SYSTEM_PROMPT = textwrap.dedent("""\
+You are an expert supply chain planner for a 7-node, 3-product network.
 
-    TOPOLOGY (1 Factory → 2 Warehouses → 4 Retailers):
-      Slot layout: index i = node*3 + product  (node 0-6, product 0-2 = 21 slots)
-      Nodes:  0=factory  1=warehouse_a  2=warehouse_b
-              3=retailer_1  4=retailer_2  5=retailer_3  6=retailer_4
-      Upstream: retailers 3,4 ← warehouse_a(1); retailers 5,6 ← warehouse_b(2);
-                warehouses 1,2 ← factory(0)
-      Base lead times (days): factory=4, warehouses=3, retailers=2
+TOPOLOGY (1 Factory -> 2 Warehouses -> 4 Retailers):
+  Slot layout: index i = node*3 + product  (node 0-6, product 0-2 = 21 slots)
+  Nodes:  0=factory  1=warehouse_a  2=warehouse_b
+          3=retailer_1  4=retailer_2  5=retailer_3  6=retailer_4
+  Upstream: retailers 3,4 <- warehouse_a(1); retailers 5,6 <- warehouse_b(2);
+            warehouses 1,2 <- factory(0)
 
-    SHIPPING METHODS:  0=standard (cheap, full lead time)  1=express (costly, 5x carbon, half lead time)
+DAILY ORDER OF OPERATIONS (each step):
+  1. News events tick / spawn (Canal Blockage, Labor Strike, Social Media Trend).
+  2. In-transit shipments whose countdown reached 0 arrive into node inventory.
+  3. Existing customer backlogs at retailers are served from on-hand stock.
+  4. YOUR ACTION is applied: orders placed into method-specific backlogs.
+  5. A link disruption may be sampled (hard difficulty only).
+  6. Dispatch: express orders processed first, then standard; upstream inventory
+     is consumed, shipments enter the pipeline with stochastic lead times.
+  7. Customer demand is sampled for each (product x retailer) stream.
+  8. Retailers serve new demand from remaining inventory; unmet -> backlog.
+  9. Fuel price multiplier does a bounded random walk [0.8, 1.5].
+  10. Step reward is computed and clipped to [-1, 1].
 
-    STRATEGY RULES:
-      1. Order enough to cover forecast demand × lead_time at each node.
-      2. If inventory + in_transit is already > 2× forecast, order 0 (avoid overstock).
-      3. Use express (1) ONLY if customer_backlog > 0 AND inventory < 5 units.
-      4. The factory node (0) gets replenished FOR FREE from infinite supply — always keep it stocked.
-      5. If a Canal Blockage event is active, lead times double — order more now.
-      6. If a Labor Strike event is active, warehouse_a (node 1) is blocked — route via warehouse_b.
-      7. If a Social Media Trend event is active, demand for product 0 is 3× normal — order aggressively.
+SHIPPING METHODS:
+  0 = standard: full base lead time, 1x transport cost, 1x carbon per unit.
+  1 = express:  half base lead time (min 1 day), 2x variable transport cost,
+                5x carbon per unit.  Use sparingly — it raises both cost and CO2.
 
-    OUTPUT: Reply with ONLY a valid JSON object — no markdown, no explanation:
-    {"order_quantities": [<21 floats>], "shipping_methods": [<21 ints, 0 or 1>]}
-""").strip()
+EVENTS (when active):
+  - Canal Blockage (14 days): effective lead times double.
+  - Labor Strike (7 days): warehouse_a (node 1) cannot dispatch; orders to
+    retailers 3,4 are blocked.  Route demand via warehouse_b if possible.
+  - Social Media Trend (5 days): demand for product 0 is 3x normal.
+
+PARTIAL VISIBILITY (hard): factory inventory shown as -1 (unknown).
+  Infer factory stock indirectly from your prior orders and lead times.
+
+SCORING:
+  Episode score (0-1) combines weighted fill-rate, cost efficiency, and
+  carbon footprint (hard only).  Step reward is a shaped proxy — not
+  identical to the final score.  Maximise long-horizon fill rate while
+  controlling cost and carbon.
+
+STRATEGY GUIDELINES:
+  1. Order enough to cover forecast demand x lead_time at each node, plus a
+     small safety buffer.
+  2. If inventory + in_transit already exceeds ~2x daily forecast x lead_time,
+     order 0 to avoid holding cost.
+  3. Factory (node 0) draws from infinite external supply — always keep it
+     stocked to feed warehouses.
+  4. Prefer standard shipping by default.  Use express (1) only for retailers
+     (nodes 3-6) with positive customer backlog AND critically low inventory.
+  5. React to events: order more during Canal Blockage, reroute during Strike,
+     boost product 0 orders during Social Media Trend.
+
+OUTPUT: Reply with ONLY a valid JSON object — no markdown, no explanation:
+{"order_quantities": [<21 floats>], "shipping_methods": [<21 ints, 0 or 1>]}\
+""")
+
+
+def build_system_prompt(spec: TaskSpec) -> str:
+    return SYSTEM_PROMPT + f"\n\nTASK OBJECTIVE:\n{spec.objective}"
 
 
 # ---------------------------------------------------------------------------
@@ -84,26 +140,28 @@ def _diag(message: str, *, verbose: bool) -> None:
 # Heuristic fallback action (used when LLM fails after retries)
 # ---------------------------------------------------------------------------
 def heuristic_action(obs: Any) -> AgentAction:
-    """
-    Base-stock heuristic: order up to (forecast × lead_time_buffer).
-    Never crashes. Used as fallback when LLM is unavailable.
-    """
-    inv = list(obs.inventory_levels)           # 21 floats
-    in_tr = list(obs.in_transit_qty)           # 21 floats
-    forecast = list(obs.demand_forecast)       # 21 floats
-    bounds = list(obs.action_bounds)           # 21 floats
-    backlog = list(obs.customer_backlog)       # 12 floats
+    """Base-stock heuristic using observation-backed lead times."""
+    inv = list(obs.inventory_levels)
+    in_tr = list(obs.in_transit_qty)
+    forecast = list(obs.demand_forecast)
+    bounds = list(obs.action_bounds)
+    backlog = list(obs.customer_backlog)
     active_events = list(getattr(obs, "active_events", []))
+
+    lead_times = list(getattr(obs, "node_base_lead_times", FALLBACK_LEAD_TIMES))
+    if len(lead_times) < 7:
+        lead_times = FALLBACK_LEAD_TIMES
 
     canal_active = "Canal Blockage" in active_events
     trend_active = "Social Media Trend" in active_events
+    strike_active = "Labor Strike" in active_events
 
     quantities: list[float] = []
     methods: list[int] = []
 
     for node in range(7):
         lead_multiplier = 2.0 if canal_active else 1.0
-        lt = BASE_LEAD_TIMES[node] * lead_multiplier
+        lt = lead_times[node] * lead_multiplier
 
         for prod in range(3):
             idx = node * 3 + prod
@@ -112,27 +170,26 @@ def heuristic_action(obs: Any) -> AgentAction:
             fc = forecast[idx] if idx < len(forecast) else 10.0
             max_q = bounds[idx] if idx < len(bounds) else 40.0
 
-            # Boost orders if Social Media Trend (product 0, 3× demand)
             fc_effective = fc * (3.0 if trend_active and prod == 0 else 1.0)
 
-            # Target = forecast per day × (lead_time + 2-day safety buffer)
-            target = fc_effective * (lt + 2.0)
+            # During strike, warehouse_a (node 1) is blocked — boost warehouse_b
+            if strike_active and node == 2:
+                fc_effective *= 1.5
+
+            safety = 2.0 if lt > 0 else 0.5
+            target = fc_effective * (lt + safety)
             net_position = current_inv + current_it
 
             order = max(0.0, target - net_position)
-
-            # Cap order: don't over-order (hold cost); respect max_order_qty
             order = min(order, max_q)
 
-            # If already have > 3× daily forecast in pipeline, skip
             if net_position > fc_effective * (lt + 6.0):
                 order = 0.0
 
             quantities.append(round(order, 2))
 
-            # Use express only if retailers are in backlog and critically low
             use_express = 0
-            if node >= 3:  # only retailers
+            if node >= 3:
                 demand_idx = prod * 4 + (node - 3)
                 bl = backlog[demand_idx] if demand_idx < len(backlog) else 0.0
                 if bl > 0 and current_inv < 3.0:
@@ -143,10 +200,9 @@ def heuristic_action(obs: Any) -> AgentAction:
 
 
 # ---------------------------------------------------------------------------
-# Prompt builder (full context, no truncation)
+# Prompt builder (full context per step)
 # ---------------------------------------------------------------------------
-def build_user_prompt(step: int, obs: Any) -> str:
-    # Format per-node inventory and forecast clearly
+def build_user_prompt(step: int, obs: Any, prev_reward_terms: dict | None = None) -> str:
     inv_lines = []
     for node in range(7):
         parts = []
@@ -155,33 +211,51 @@ def build_user_prompt(step: int, obs: Any) -> str:
             inv_val = obs.inventory_levels[idx] if idx < len(obs.inventory_levels) else 0.0
             it_val = obs.in_transit_qty[idx] if idx < len(obs.in_transit_qty) else 0.0
             fc_val = obs.demand_forecast[idx] if idx < len(obs.demand_forecast) else 0.0
-            parts.append(f"P{prod}:inv={inv_val:.1f},transit={it_val:.1f},fc={fc_val:.1f}")
+            bl_val = obs.order_backlogs[idx] if idx < len(obs.order_backlogs) else 0.0
+            parts.append(f"P{prod}:inv={inv_val:.1f},transit={it_val:.1f},fc={fc_val:.1f},bl={bl_val:.1f}")
         inv_lines.append(f"  {ECHELON_NAMES[node]}: " + " | ".join(parts))
 
-    # Customer backlogs (12 = 3 products × 4 retailers)
     backlog = obs.customer_backlog if hasattr(obs, "customer_backlog") else []
     bl_str = ", ".join(f"{v:.1f}" for v in backlog) if backlog else "none"
 
     active_events = ", ".join(obs.active_events) if obs.active_events else "none"
-    h = int(obs.horizon) if hasattr(obs, "horizon") else step
-    horizon_remaining = h - step
+    horizon_remaining = int(obs.horizon) - step
 
-    prompt = textwrap.dedent(f"""
-        Day {step} of {obs.horizon} | Steps remaining: {horizon_remaining}
-        Fill rate so far: {obs.fill_rate:.3f} | Carbon: {obs.carbon_footprint:.1f}
-        Active events: {active_events}
+    lead_times = getattr(obs, "node_base_lead_times", FALLBACK_LEAD_TIMES)
+    lt_str = ", ".join(f"{ECHELON_NAMES[i]}={int(lead_times[i])}" for i in range(7))
 
-        INVENTORY / IN-TRANSIT / FORECAST per node-product:
-        {chr(10).join(inv_lines)}
+    fuel = getattr(obs, "fuel_price_multiplier", 1.0)
+    regime = getattr(obs, "regime", "baseline")
+    disruption = getattr(obs, "disruption_link", None) or "none"
 
-        Customer backlog (P0_R1..P0_R4, P1_R1..P1_R4, P2_R1..P2_R4):
-        [{bl_str}]
+    prev_block = ""
+    if prev_reward_terms:
+        total = prev_reward_terms.get("total", 0)
+        fill_b = prev_reward_terms.get("fill_rate_bonus", 0)
+        hold = prev_reward_terms.get("holding_cost", 0)
+        stock = prev_reward_terms.get("stockout_penalty", 0)
+        trans = prev_reward_terms.get("transport_cost", 0)
+        prev_block = (
+            f"\nPrevious step reward: {total:+.3f} "
+            f"(fill_bonus={fill_b:.3f}, hold={hold:.1f}, stockout={stock:.1f}, transport={trans:.2f})"
+        )
 
-        Order bounds per slot (max_order_qty):
-        {[round(b, 1) for b in obs.action_bounds]}
+    prompt = textwrap.dedent(f"""\
+Day {step} of {obs.horizon} | Remaining: {horizon_remaining} | Regime: {regime}
+Fill rate: {obs.fill_rate:.3f} | Carbon: {obs.carbon_footprint:.1f} | Fuel multiplier: {fuel:.3f}
+Active events: {active_events} | Disrupted link: {disruption}
+Base lead times: {lt_str}{prev_block}
 
-        Provide the optimal action as JSON now. Remember: 21 quantities, 21 methods.
-    """).strip()
+INVENTORY / IN-TRANSIT / FORECAST / ORDER-BACKLOG per node-product:
+{chr(10).join(inv_lines)}
+
+Customer backlog (P0_R1..R4, P1_R1..R4, P2_R1..R4):
+[{bl_str}]
+
+Order bounds (max_order_qty per slot):
+{[round(b, 1) for b in obs.action_bounds]}
+
+Respond with the optimal JSON action now.""")
     return prompt
 
 
@@ -195,10 +269,7 @@ def _call_llm(
     *,
     temperature: float,
 ) -> tuple[Optional[AgentAction], Optional[str]]:
-    """
-    Returns (AgentAction, source) where source is 'llm' or 'heuristic'.
-    Never raises an exception.
-    """
+    """Returns (AgentAction, source) where source is 'llm' or None on failure."""
     last_error: str = ""
 
     for attempt in range(LLM_MAX_RETRIES + 1):
@@ -214,7 +285,6 @@ def _call_llm(
             )
             elapsed = time.perf_counter() - t0
 
-            # Guard against empty choices list
             if not completion.choices:
                 raise ValueError("API returned 0 choices — empty response")
 
@@ -250,7 +320,6 @@ def _parse_action_safe(response_text: str) -> AgentAction:
     """Parse JSON from LLM response. Handles markdown code fences and auto-pads lists."""
     text = response_text.strip()
 
-    # Strip markdown fences
     for prefix in ("```json", "```"):
         if text.startswith(prefix):
             text = text[len(prefix):]
@@ -258,18 +327,16 @@ def _parse_action_safe(response_text: str) -> AgentAction:
         text = text[:-3]
     text = text.strip()
 
-    # Find the JSON object in case there's surrounding text
     start = text.find("{")
     end = text.rfind("}") + 1
     if start != -1 and end > start:
         text = text[start:end]
 
-    data = json.loads(text)  # raises JSONDecodeError if invalid
+    data = json.loads(text)
 
     order_qs: list = data.get("order_quantities", [0.0] * 21)
     ship_ms: list = data.get("shipping_methods", [0] * 21)
 
-    # Auto-pad / truncate to exactly 21
     order_qs = [float(v) for v in order_qs]
     ship_ms = [int(v) for v in ship_ms]
     if len(order_qs) < 21:
@@ -312,6 +379,8 @@ def run_task(
         verbose=verbose,
     )
 
+    system_prompt = build_system_prompt(spec)
+    prev_reward_terms: dict | None = None
     steps_taken = 0
     llm_calls = 0
     heuristic_calls = 0
@@ -342,9 +411,9 @@ def run_task(
                     source = "heuristic"
                     heuristic_calls += 1
                 else:
-                    user_prompt = build_user_prompt(step, obs)
+                    user_prompt = build_user_prompt(step, obs, prev_reward_terms)
                     messages = [
-                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ]
                     action, source = _call_llm(
@@ -370,6 +439,7 @@ def run_task(
             obs = env.step(action)
             steps_taken = step
             reward = float(obs.reward) if obs.reward is not None else 0.0
+            prev_reward_terms = dict(obs.reward_terms) if obs.reward_terms else None
             _protocol_line(f"[STEP] step={step} reward={_fmt_reward(reward)}")
 
             _diag(
@@ -456,7 +526,7 @@ def main() -> None:
     specs = task_specs()
     if verbose:
         print("=" * 60, file=sys.stderr, flush=True)
-        print("Inference run  (diagnostics→stderr | protocol→stdout)", file=sys.stderr, flush=True)
+        print("Inference run  (diagnostics->stderr | protocol->stdout)", file=sys.stderr, flush=True)
         print(f"  API base URL : {API_BASE_URL}", file=sys.stderr, flush=True)
         print(f"  Model        : {MODEL_NAME}", file=sys.stderr, flush=True)
         print(

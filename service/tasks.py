@@ -1,4 +1,8 @@
-"""Enumerated submission tasks: ids, reset kwargs, objectives, grader references."""
+"""Enumerated submission tasks: ids, reset kwargs, objectives, grader references.
+
+``objective`` strings are consumed by ``inference.py`` (``build_system_prompt``)
+to inject per-task grading criteria into the LLM system message.
+"""
 
 from __future__ import annotations
 

@@ -47,6 +47,8 @@ class AgentObservation(Observation):
     customer_backlog: List[float] = Field(default_factory=list, min_length=12, max_length=12)
     recent_customer_demand: List[float] = Field(default_factory=list)
     carbon_footprint: float = 0.0
+    fuel_price_multiplier: float = 1.0
+    node_base_lead_times: List[float] = Field(default_factory=lambda: [4, 3, 3, 2, 2, 2, 2])
     fill_rate: float = 0.0
     disruption_link: Optional[str] = None
     regime: str = "baseline"
