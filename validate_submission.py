@@ -84,6 +84,37 @@ def check_docker_build(repo_dir: str, timeout_s: int = 600) -> CheckResult:
     return CheckResult(False, "Docker build failed", details=tail)
 
 
+def check_grader_smoke(repo_dir: str) -> CheckResult:
+    """Import graders and env; one zero-action step per task; scores must be in [0, 1]."""
+    if repo_dir not in sys.path:
+        sys.path.insert(0, repo_dir)
+    try:
+        from service.grading import grade_episode
+        from service.hackathon_environment import SupplyChainEnv
+        from service.models import AgentAction
+        from service.tasks import task_specs
+    except ImportError as exc:
+        return CheckResult(False, "grader smoke import failed", str(exc))
+
+    for spec in task_specs():
+        env = SupplyChainEnv()
+        env.reset(difficulty=spec.difficulty, seed=spec.seed, horizon=spec.horizon)
+        env.step(
+            AgentAction(
+                order_quantities=[0.0] * 21,
+                shipping_methods=[0] * 21,
+            )
+        )
+        score = float(grade_episode(env.state, spec.task_id))
+        if score < 0.0 or score > 1.0:
+            return CheckResult(
+                False,
+                f"grader score out of range for task={spec.task_id}",
+                f"score={score!r}",
+            )
+    return CheckResult(True, "grader smoke passed (all tasks in [0.0, 1.0])")
+
+
 def check_openenv_validate(repo_dir: str) -> CheckResult:
     if shutil.which("openenv") is None:
         return CheckResult(
@@ -109,12 +140,23 @@ def main() -> int:
             - Ping HF Space /reset (also tries /web/reset)
             - docker build (repo root Dockerfile)
             - openenv validate
+            Optional: --smoke-graders (after the above), or --smoke-graders-only.
             """
         ).strip(),
     )
-    parser.add_argument("ping_url", help="HuggingFace Space URL, e.g. https://your-space.hf.space")
+    parser.add_argument("ping_url", nargs="?", default="", help="HuggingFace Space URL (optional if --smoke-graders-only)")
     parser.add_argument("--repo-dir", default=".", help="Path to repo root (default: .)")
     parser.add_argument("--docker-timeout", type=int, default=600, help="Docker build timeout seconds (default: 600)")
+    parser.add_argument(
+        "--smoke-graders",
+        action="store_true",
+        help="After other checks, run a short grader smoke test (scores in [0,1]).",
+    )
+    parser.add_argument(
+        "--smoke-graders-only",
+        action="store_true",
+        help="Only run grader smoke test (no HF ping, docker, or openenv validate).",
+    )
     args = parser.parse_args()
 
     repo_dir = os.path.abspath(args.repo_dir)
@@ -122,17 +164,30 @@ def main() -> int:
         print(f"Error: repo-dir not found: {repo_dir}", file=sys.stderr)
         return 2
 
+    if args.smoke_graders_only:
+        _log("========================================")
+        _log("OpenEnv Grader Smoke Test")
+        _log("========================================")
+        _log(f"Repo: {repo_dir}")
+        r = check_grader_smoke(repo_dir)
+        _log(("PASSED" if r.ok else "FAILED") + f" -- {r.message}")
+        if r.details:
+            print(r.details)
+        return 0 if r.ok else 1
+
+    ping_url = (args.ping_url or "").strip()
+    if not ping_url:
+        print("Error: ping_url is required unless --smoke-graders-only is set.", file=sys.stderr)
+        return 2
+
     _log("========================================")
     _log("OpenEnv Submission Validator")
     _log("========================================")
     _log(f"Repo:     {repo_dir}")
-    _log(f"Ping URL: {args.ping_url.rstrip('/')}")
-
-    checks: list[tuple[str, CheckResult]] = []
+    _log(f"Ping URL: {ping_url.rstrip('/')}")
 
     _log("Step 1/3: Pinging HF Space reset ...")
-    r1 = check_hf_space(args.ping_url)
-    checks.append(("Step 1", r1))
+    r1 = check_hf_space(ping_url)
     _log(("PASSED" if r1.ok else "FAILED") + f" -- {r1.message}")
     if r1.details:
         print(r1.details)
@@ -141,7 +196,6 @@ def main() -> int:
 
     _log("Step 2/3: Running docker build ...")
     r2 = check_docker_build(repo_dir, timeout_s=args.docker_timeout)
-    checks.append(("Step 2", r2))
     _log(("PASSED" if r2.ok else "FAILED") + f" -- {r2.message}")
     if r2.details:
         print(r2.details)
@@ -150,15 +204,23 @@ def main() -> int:
 
     _log("Step 3/3: Running openenv validate ...")
     r3 = check_openenv_validate(repo_dir)
-    checks.append(("Step 3", r3))
     _log(("PASSED" if r3.ok else "FAILED") + f" -- {r3.message}")
     if r3.details:
         print(r3.details)
     if not r3.ok:
         return 1
 
+    if args.smoke_graders:
+        _log("Step 4: Grader smoke test ...")
+        r4 = check_grader_smoke(repo_dir)
+        _log(("PASSED" if r4.ok else "FAILED") + f" -- {r4.message}")
+        if r4.details:
+            print(r4.details)
+        if not r4.ok:
+            return 1
+
     _log("========================================")
-    _log("All 3/3 checks passed. Ready to submit.")
+    _log("All checks passed. Ready to submit.")
     _log("========================================")
     return 0
 

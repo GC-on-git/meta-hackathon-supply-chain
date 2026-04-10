@@ -23,6 +23,7 @@ ECHELON_NAMES = ["factory", "warehouse_a", "warehouse_b", "retailer_1", "retaile
 HOLDING_COSTS = [0.010, 0.015, 0.015, 0.025, 0.025, 0.025, 0.025]
 TRANSPORT_COSTS = [0.008, 0.012, 0.012, 0.015, 0.015, 0.015, 0.015]
 FIXED_ORDER_COSTS = [0.04, 0.06, 0.06, 0.08, 0.08, 0.08, 0.08]
+EXPRESS_VARIABLE_MULTIPLIER = 2.0  # variable transport $ for express vs standard
 
 # Per-term divisors for reward shaping: raw penalties are divided by these refs, then averaged
 # so no single cost channel dominates. Refs are tuned from ~p50 of moderate-random policies
@@ -180,9 +181,14 @@ class SupplyChainEnv(Environment):
         self._horizon = int(horizon or 365)
         self._max_order_qty = float(max_order_qty or self._config["max_order_qty"])
         
-        # Adaptation for 1-2-4 topology
         self._active_echelons = [True] * self._num_nodes
-        self._lead_times = [4, 3, 3, 2, 2, 2, 2]
+        # Expand 3-tier preset lead_times [factory, warehouse, retailer] → 7 nodes
+        tier_lts = self._config["lead_times"]
+        self._lead_times = [
+            tier_lts[0],                              # factory (node 0)
+            tier_lts[1], tier_lts[1],                 # warehouses (nodes 1, 2)
+            tier_lts[2], tier_lts[2], tier_lts[2], tier_lts[2],  # retailers (nodes 3–6)
+        ]
 
         base_demand = float(self._config["base_demand"])
         # Different base demands for different products
@@ -260,7 +266,7 @@ class SupplyChainEnv(Environment):
         self._register_orders(sanitized_quantities, sanitized_methods)
 
         self._last_disruption_link = self._sample_disruption_link()
-        shipped_quantities = self._dispatch_replenishment_orders()
+        shipped_quantities, step_transport = self._dispatch_replenishment_orders()
 
         current_demands = self._sample_customer_demand(day=self._episode_state.step_count)
         served_demands = self._serve_customer_demand(current_demands)
@@ -268,13 +274,12 @@ class SupplyChainEnv(Environment):
             self._latest_forecasts[p_idx] = self._update_forecast(demand, p_idx)
             self._recent_customer_demand[p_idx].append(demand)
 
-        # Update fuel price multiplier (random walk, +/- 5%, bounded [0.8, 1.5])
         self._fuel_price_multiplier = max(0.8, min(1.5, self._fuel_price_multiplier * (1 + self._rng.uniform(-0.05, 0.05))))
 
         reward_terms = self._compute_reward_terms(
             current_demand=sum(current_demands),
             served_demand=sum(served_demands),
-            shipped_quantities=shipped_quantities,
+            step_transport_cost=step_transport,
         )
         done = self._episode_state.step_count >= self._horizon
         self._episode_state.cumulative_reward += reward_terms["total"]
@@ -422,34 +427,32 @@ class SupplyChainEnv(Environment):
                 self._inventory[node_idx][p_idx] -= backlog_served
                 self._customer_backlog[demand_idx] -= backlog_served
 
-    def _dispatch_replenishment_orders(self) -> list[float]:
+    def _dispatch_replenishment_orders(self) -> tuple[list[float], float]:
+        """Returns (shipped_quantities, step_transport_cost_pre_fuel)."""
         shipped_quantities = [0.0] * (self._num_nodes * self._num_products)
         step_carbon = 0.0
-        
+        step_transport = 0.0
+
         for node_index in range(self._num_nodes):
             if not self._active_echelons[node_index]:
                 continue
-            
-            # Labor Strike: One warehouse (node 1) goes offline
+
             if "Labor Strike" in self._active_events and node_index == 1:
                 continue
 
             for p_idx in range(self._num_products):
                 source_index = self._upstream_source(node_index)
-                
-                # Labor Strike: If source is offline
+
                 if "Labor Strike" in self._active_events and source_index == 1:
                     continue
-                source_index = self._upstream_source(node_index)
-                
-                # Dispatch Express first, then Standard
+
                 for method in [1, 0]:
                     requested = self._order_backlogs[node_index][p_idx][method]
                     if requested <= 0:
                         continue
 
                     available = requested if source_index is None else min(requested, self._inventory[source_index][p_idx])
-                    
+
                     if self._last_disruption_link == ECHELON_NAMES[node_index]:
                         available *= 0.25
 
@@ -467,19 +470,20 @@ class SupplyChainEnv(Environment):
                     if base_lt <= 0:
                         self._inventory[node_index][p_idx] += shipped
                     else:
-                        # Canal Blockage: Doubles lead time
                         lt_multiplier = 2.0 if "Canal Blockage" in self._active_events else 1.0
                         effective_lt = max(1, base_lt // 2) if method == 1 else base_lt
                         effective_lt = int(effective_lt * lt_multiplier)
-                        
+
                         stochastic_lt = max(1, self._rng.randint(effective_lt - 1, effective_lt + 1))
                         self._pipelines[node_index][p_idx].append(Shipment(quantity=shipped, eta=stochastic_lt, method=method))
-                    
-                    # Carbon: 1.0 for Standard, 5.0 for Express
+
                     step_carbon += shipped * (5.0 if method == 1 else 1.0)
-                    
+
+                    method_mult = EXPRESS_VARIABLE_MULTIPLIER if method == 1 else 1.0
+                    step_transport += TRANSPORT_COSTS[node_index] * shipped * method_mult + FIXED_ORDER_COSTS[node_index]
+
         self._total_carbon += step_carbon
-        return shipped_quantities
+        return shipped_quantities, step_transport
 
     def _update_forecast(self, observed_demand: float, demand_idx: int) -> float:
         # demand_idx is in range [0, 11] (3 products * 4 retailers)
@@ -505,10 +509,10 @@ class SupplyChainEnv(Environment):
         self,
         current_demand: float,
         served_demand: float,
-        shipped_quantities: list[float],
+        step_transport_cost: float,
     ) -> dict[str, float]:
         holding_cost = 0.0
-        target_inv = [60.0, 30.0, 30.0, 15.0, 15.0, 15.0, 15.0] 
+        target_inv = [60.0, 30.0, 30.0, 15.0, 15.0, 15.0, 15.0]
         for e_idx in range(self._num_nodes):
             if not self._active_echelons[e_idx]:
                 continue
@@ -522,36 +526,13 @@ class SupplyChainEnv(Environment):
         stockout_penalty = 0.11 * sum(self._customer_backlog)
         for e_idx in range(self._num_nodes):
             if self._active_echelons[e_idx]:
-                # Flattened backlog across methods
                 stockout_penalty += 0.02 * sum(sum(m) for m in self._order_backlogs[e_idx])
 
-        transport_cost = 0.0
-        # For simplicity, we calculate transport cost from shipped_quantities
-        # and assume a mix of methods based on what was dispatched
-        # Wait, I should probably pass more info to _compute_reward_terms or calculate it inside _dispatch
-        # Let's just track transport_cost in _dispatch and pass it here?
-        # Better: calculate it based on the shipments actually made in this step.
-        # But for this iteration, let's just use the total shipped and apply a multiplier if Express was used.
-        # Actually, let's keep it simple: shipping_costs are already inclusive of multipliers.
-        # Wait, I didn't return transport_cost from _dispatch. Let's fix that.
-        
-        # Let's just use a simplified version: transport_cost is already calculated using fuel_multiplier.
-        # I'll add a carbon penalty here.
+        transport_cost = step_transport_cost * self._fuel_price_multiplier
+
         carbon_penalty = 0.05 * self._total_carbon / (self._episode_state.step_count + 1)
 
         fill_rate_bonus = 0.65 * self._safe_ratio(served_demand, current_demand if current_demand > 0 else 1.0)
-        
-        # Re-calculate transport cost more accurately if needed, but for now we'll stick to the existing one
-        # and just add carbon_penalty.
-        for e_idx in range(self._num_nodes):
-            for p_idx in range(self._num_products):
-                idx = e_idx * self._num_products + p_idx
-                shipped = shipped_quantities[idx]
-                if shipped <= 0:
-                    continue
-                transport_cost += TRANSPORT_COSTS[e_idx] * shipped + FIXED_ORDER_COSTS[e_idx]
-        
-        transport_cost *= self._fuel_price_multiplier
 
         refs_cfg = self._config.get("reward_term_refs") or {}
         refs = {**DEFAULT_REWARD_TERM_REFS, **refs_cfg}
@@ -645,6 +626,8 @@ class SupplyChainEnv(Environment):
             customer_backlog=[round(value, 4) for value in self._customer_backlog],
             recent_customer_demand=[round(val, 4) for dq in self._recent_customer_demand for val in list(dq)],
             carbon_footprint=round(self._total_carbon, 4),
+            fuel_price_multiplier=round(self._fuel_price_multiplier, 4),
+            node_base_lead_times=[float(lt) for lt in self._lead_times],
             fill_rate=round(self._episode_state.fill_rate, 4),
             disruption_link=self._last_disruption_link,
             regime=self._episode_state.regime,

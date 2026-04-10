@@ -24,7 +24,7 @@ class _GradableState(Protocol):
 
 # --- Per-task reference constants for cost normalisation ---
 # Chosen so that S_cost ≈ 0.5 at a "typical moderate" episode cost.
-C_REF = {"easy": 8_000.0, "medium": 10_000.0, "hard": 15_000.0}
+C_REF = {"easy": 8_000.0, "medium": 10_000.0, "hard": 18_000.0}
 
 # Carbon reference (hard only): moderate carbon ≈ 15k kgCO2 → S_co2 ≈ 0.37
 K_REF = 15_000.0
