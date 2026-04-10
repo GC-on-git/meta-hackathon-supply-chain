@@ -14,28 +14,12 @@ from service.grading import grade_episode
 from service.hackathon_environment import SupplyChainEnv
 from service.models import AgentAction
 
-load_dotenv()
-
-# ---------------------------------------------------------------------------
-# Configuration — all sourced from environment variables per hackathon spec
-# ---------------------------------------------------------------------------
-API_BASE_URL: str = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-MODEL_NAME: str = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
-
-# Hackathon harness provides HF_TOKEN; local runs can use API_KEY
-API_KEY: Optional[str] = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
-
-MAX_STEPS: int = 30
-TEMPERATURE: float = 0.2
-MAX_TOKENS: int = 1024
-LLM_TIMEOUT: float = 60.0   # seconds per API call
-LLM_MAX_RETRIES: int = 2    # retries before using heuristic fallback
-
-TASK_SEEDS: dict[str, int] = {
-    "easy":   int(os.getenv("TASK_SEED_EASY",   "1001")),
-    "medium": int(os.getenv("TASK_SEED_MEDIUM", "2002")),
-    "hard":   int(os.getenv("TASK_SEED_HARD",   "3003")),
-}
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
+MAX_STEPS = 30
+TEMPERATURE = 0.2
+MAX_TOKENS = 1000
 
 # ---------------------------------------------------------------------------
 # Node / topology constants (mirrors hackathon_environment.py for prompt)
@@ -179,7 +163,8 @@ def build_user_prompt(step: int, obs: Any) -> str:
     bl_str = ", ".join(f"{v:.1f}" for v in backlog) if backlog else "none"
 
     active_events = ", ".join(obs.active_events) if obs.active_events else "none"
-    horizon_remaining = (obs.horizon - step) if hasattr(obs, "horizon") else (MAX_STEPS - step)
+    h = int(obs.horizon) if hasattr(obs, "horizon") else step
+    horizon_remaining = h - step
 
     prompt = textwrap.dedent(f"""
         Day {step} of {obs.horizon} | Steps remaining: {horizon_remaining}
@@ -207,6 +192,8 @@ def _call_llm(
     client: OpenAI,
     messages: list[dict],
     verbose: bool,
+    *,
+    temperature: float,
 ) -> tuple[Optional[AgentAction], Optional[str]]:
     """
     Returns (AgentAction, source) where source is 'llm' or 'heuristic'.
@@ -220,7 +207,7 @@ def _call_llm(
             completion = client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=messages,
-                temperature=TEMPERATURE,
+                temperature=temperature,
                 max_tokens=MAX_TOKENS,
                 stream=False,
                 timeout=LLM_TIMEOUT,
@@ -296,54 +283,83 @@ def _parse_action_safe(response_text: str) -> AgentAction:
 # ---------------------------------------------------------------------------
 # Main task runner
 # ---------------------------------------------------------------------------
-def run_task(client: OpenAI, task_name: str, *, verbose: bool = True) -> float:
-    _protocol_line(f"[START] task={task_name}")
+def run_task(
+    client: Optional[OpenAI],
+    spec: TaskSpec,
+    *,
+    verbose: bool = True,
+    policy: str = "llm",
+    temperature: float = DEFAULT_TEMPERATURE,
+) -> float:
+    tid = spec.task_id
+    _protocol_line(f"[START] task={tid}")
 
     try:
         env = SupplyChainEnv()
-        seed = TASK_SEEDS.get(task_name, 0)
-        obs = env.reset(difficulty=task_name, seed=seed, horizon=MAX_STEPS)
+        obs = env.reset(
+            difficulty=spec.difficulty,
+            seed=spec.seed,
+            horizon=spec.horizon,
+        )
     except Exception as exc:
-        # Fatal env init failure — emit minimum protocol and return 0
-        _diag(f"ENV RESET FAILED for task={task_name}: {exc}", verbose=True)
-        _protocol_line(f"[END] task={task_name} score=0 steps=0")
+        _diag(f"ENV RESET FAILED for task={tid}: {exc}", verbose=True)
+        _protocol_line(f"[END] task={tid} score=0 steps=0")
         return 0.0
 
     _diag(
-        f"--- Task {task_name}: seed={seed} horizon={MAX_STEPS} "
-        f"fill_rate={obs.fill_rate:.4f} day={obs.day} ---",
+        f"--- Task {tid}: seed={spec.seed} horizon={spec.horizon} "
+        f"fill_rate={obs.fill_rate:.4f} day={obs.day} policy={policy} ---",
         verbose=verbose,
     )
 
     steps_taken = 0
     llm_calls = 0
     heuristic_calls = 0
+    zeros_calls = 0
 
-    for step in range(1, MAX_STEPS + 1):
+    for step in range(1, spec.horizon + 1):
         try:
-            user_prompt = build_user_prompt(step, obs)
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": user_prompt},
-            ]
-
             _diag(
-                f"Step {step}/{MAX_STEPS} | inv_sum={sum(obs.inventory_levels):.1f} "
+                f"Step {step}/{spec.horizon} | inv_sum={sum(obs.inventory_levels):.1f} "
                 f"backlog={sum(obs.customer_backlog):.1f} events={obs.active_events}",
                 verbose=verbose,
             )
 
-            # Try LLM first, fall back to heuristic
-            action, source = _call_llm(client, messages, verbose=verbose)
-
-            if action is None:
+            if policy == "zeros":
+                action = AgentAction(
+                    order_quantities=[0.0] * 21,
+                    shipping_methods=[0] * 21,
+                )
+                source = "zeros"
+                zeros_calls += 1
+            elif policy == "heuristic":
                 action = heuristic_action(obs)
                 source = "heuristic"
-
-            if source == "llm":
-                llm_calls += 1
-            else:
                 heuristic_calls += 1
+            else:
+                if client is None:
+                    action = heuristic_action(obs)
+                    source = "heuristic"
+                    heuristic_calls += 1
+                else:
+                    user_prompt = build_user_prompt(step, obs)
+                    messages = [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ]
+                    action, source = _call_llm(
+                        client,
+                        messages,
+                        verbose=verbose,
+                        temperature=temperature,
+                    )
+                    if action is None:
+                        action = heuristic_action(obs)
+                        source = "heuristic"
+                    if source == "llm":
+                        llm_calls += 1
+                    else:
+                        heuristic_calls += 1
 
             _diag(
                 f"  [{source}] orders={[round(q, 1) for q in action.order_quantities[:7]]}... "
@@ -366,7 +382,6 @@ def run_task(client: OpenAI, task_name: str, *, verbose: bool = True) -> float:
                 break
 
         except Exception as exc:
-            # Absolute last-resort: log to stderr, emit a STEP with 0 reward, continue
             _diag(
                 f"  UNHANDLED exception at step {step}: {type(exc).__name__}: {exc}\n"
                 f"  {traceback.format_exc()}",
@@ -374,25 +389,24 @@ def run_task(client: OpenAI, task_name: str, *, verbose: bool = True) -> float:
             )
             _protocol_line(f"[STEP] step={step} reward=0")
             steps_taken = step
-            # Try to keep going with heuristic action
             try:
                 obs = env.step(heuristic_action(obs))
             except Exception:
-                break  # env is broken, stop this task
+                break
 
-    # Grade and emit [END]
     try:
         state = env.state
-        score = float(grade_episode(state, task_name))
+        score = float(grade_episode(state, tid))
     except Exception as exc:
         _diag(f"  GRADING FAILED: {exc}", verbose=True)
         score = 0.0
 
-    _protocol_line(f"[END] task={task_name} score={_fmt_score(score)} steps={steps_taken}")
+    _protocol_line(f"[END] task={tid} score={_fmt_score(score)} steps={steps_taken}")
 
     _diag(
-        f"Task {task_name} complete: score={score:.4f} llm_calls={llm_calls} "
-        f"heuristic_calls={heuristic_calls} fill_rate={getattr(env.state, 'fill_rate', 0):.4f}",
+        f"Task {tid} complete: score={score:.4f} llm_calls={llm_calls} "
+        f"heuristic_calls={heuristic_calls} zeros_calls={zeros_calls} "
+        f"fill_rate={getattr(env.state, 'fill_rate', 0):.4f}",
         verbose=verbose,
     )
     return score
@@ -408,6 +422,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Protocol lines on stdout only; diagnostics on stderr suppressed.",
     )
+    p.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Use temperature=0 for LLM calls (also set via INFERENCE_DETERMINISTIC=1).",
+    )
+    p.add_argument(
+        "--policy",
+        choices=("llm", "zeros", "heuristic"),
+        default="llm",
+        help="llm: OpenAI client + heuristic fallback; zeros/heuristic: fully deterministic actions.",
+    )
     return p.parse_args()
 
 
@@ -415,52 +440,79 @@ def main() -> None:
     args = parse_args()
     verbose = not args.quiet
 
-    # Warn (don't exit) if API_KEY is missing — heuristic fallback will handle it
-    if not API_KEY:
+    det_env = os.getenv("INFERENCE_DETERMINISTIC", "").strip().lower() in ("1", "true", "yes")
+    deterministic = bool(args.deterministic or det_env)
+    temperature = 0.0 if deterministic else DEFAULT_TEMPERATURE
+    policy = args.policy
+
+    if policy == "llm" and not API_KEY:
         print(
-            "WARNING: HF_TOKEN / API_KEY is not set. All LLM calls will fail and "
-            "the heuristic fallback agent will be used for all steps.",
+            "WARNING: OPENAI_API_KEY, HF_TOKEN, and API_KEY are unset. "
+            "LLM calls will fail; heuristic fallback will be used each step.",
             file=sys.stderr,
             flush=True,
         )
 
+    specs = task_specs()
     if verbose:
         print("=" * 60, file=sys.stderr, flush=True)
         print("Inference run  (diagnostics→stderr | protocol→stdout)", file=sys.stderr, flush=True)
         print(f"  API base URL : {API_BASE_URL}", file=sys.stderr, flush=True)
         print(f"  Model        : {MODEL_NAME}", file=sys.stderr, flush=True)
-        print(f"  API key set  : {bool(API_KEY)}", file=sys.stderr, flush=True)
         print(
-            f"  Generation   : temp={TEMPERATURE} max_tokens={MAX_TOKENS} "
-            f"max_steps={MAX_STEPS} timeout={LLM_TIMEOUT}s",
-            file=sys.stderr, flush=True,
+            f"  API key set  : {bool(API_KEY)} (OPENAI_API_KEY | HF_TOKEN | API_KEY)",
+            file=sys.stderr,
+            flush=True,
         )
-        print(f"  Task seeds   : {TASK_SEEDS}", file=sys.stderr, flush=True)
+        print(
+            f"  Policy       : {policy}  temperature={temperature}  deterministic={deterministic}",
+            file=sys.stderr,
+            flush=True,
+        )
+        print(
+            f"  Generation   : max_tokens={MAX_TOKENS} timeout={LLM_TIMEOUT}s",
+            file=sys.stderr,
+            flush=True,
+        )
+        print(
+            "  Tasks        : "
+            + ", ".join(f"{s.task_id}(seed={s.seed},h={s.horizon})" for s in specs),
+            file=sys.stderr,
+            flush=True,
+        )
         print("=" * 60, file=sys.stderr, flush=True)
 
-    # Build client — if key is missing, still construct (all calls will fail → heuristic)
-    client = OpenAI(
-        base_url=API_BASE_URL,
-        api_key=API_KEY or "placeholder-no-key",
-    )
+    client: Optional[OpenAI] = None
+    if policy == "llm":
+        client = OpenAI(
+            base_url=API_BASE_URL,
+            api_key=API_KEY or "placeholder-no-key",
+        )
 
-    tasks = ["easy", "medium", "hard"]
     scores: dict[str, float] = {}
 
-    for task in tasks:
+    for spec in specs:
         try:
-            scores[task] = run_task(client, task, verbose=verbose)
+            scores[spec.task_id] = run_task(
+                client,
+                spec,
+                verbose=verbose,
+                policy=policy,
+                temperature=temperature,
+            )
         except Exception as exc:
-            # Should never reach here — run_task is internally guarded — but just in case
-            _diag(f"FATAL: run_task({task}) raised {type(exc).__name__}: {exc}", verbose=True)
-            _protocol_line(f"[END] task={task} score=0 steps=0")
-            scores[task] = 0.0
+            _diag(
+                f"FATAL: run_task({spec.task_id}) raised {type(exc).__name__}: {exc}",
+                verbose=True,
+            )
+            _protocol_line(f"[END] task={spec.task_id} score=0 steps=0")
+            scores[spec.task_id] = 0.0
 
     if verbose:
         print("", file=sys.stderr, flush=True)
         print("Final Scores:", file=sys.stderr, flush=True)
-        for task, score in scores.items():
-            print(f"  {task.capitalize():8s}: {score:.4f}", file=sys.stderr, flush=True)
+        for task_id, score in scores.items():
+            print(f"  {task_id.capitalize():8s}: {score:.4f}", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":

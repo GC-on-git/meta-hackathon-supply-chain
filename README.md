@@ -434,32 +434,51 @@ The environment supports three distinct, graded tasks, each scored programmatica
 | Medium | > 80% | 0.65 / 0.35 / — |
 | Hard | > 85% | 0.55 / 0.25 / 0.20 |
 
+Task ids, seeds, horizon, and objective strings are defined in **`service/tasks.py`** (single registry). Grading logic lives in **`service/grading.py`** (`grade_episode`).
+
 ### Baseline Inference
 
-We provide a baseline script `inference.py` at the repository root that evaluates the three tasks sequentially using an OpenAI-compatible client. Ensure the following environment variables are set:
+`inference.py` at the repository root runs the three tasks in order using the **`openai.OpenAI`** client. Set at least one API key (first match wins):
 
 ```bash
-export API_BASE_URL="https://api.openai.com/v1" # Or Hugging Face Router
-export MODEL_NAME="gpt-4o"                      # Or another capable model
-export HF_TOKEN="<your_api_key>"                # Can also use API_KEY
+export OPENAI_API_KEY="<key>"   # preferred for OpenAI / many routers
+# or
+export HF_TOKEN="<key>"       # Hugging Face / harness
+# or
+export API_KEY="<key>"        # local convenience
+
+export API_BASE_URL="https://router.huggingface.co/v1"   # or https://api.openai.com/v1
+export MODEL_NAME="gpt-4o"    # or another chat model id
 ```
 
-Run the inference:
+Optional reproducibility knobs:
+
+- `TASK_HORIZON` (default `30`), `TASK_SEED_EASY` / `TASK_SEED_MEDIUM` / `TASK_SEED_HARD`
+- `--deterministic` or `INFERENCE_DETERMINISTIC=1` → LLM **`temperature=0`**
+- `--policy llm` (default) → LLM + heuristic fallback; **`--policy zeros`** or **`--policy heuristic`** → no LLM, fully deterministic actions
+
+Run:
+
 ```bash
 python inference.py
+python inference.py --deterministic
+python inference.py --policy zeros
 ```
-**Baseline Scores** (simple heuristic, 30-step horizon, seeded rollouts):
-- Easy Task: `~0.23`
-- Medium Task: `~0.28`
-- Hard Task: `~0.29`
 
-Scores are intentionally low for a naive agent; a well-tuned policy can reach significantly higher values.
+**Reference scores (fully reproducible):** with `--policy zeros`, default seeds and `TASK_HORIZON=30`, final grader outputs are approximately:
+
+- Easy: `0.177`
+- Medium: `0.208`
+- Hard: `0.369`
+
+LLM-driven runs depend on provider, model, and sampling; use `--deterministic` to reduce variance when the API supports stable decoding.
 
 ### Pre-submission Validation
 
-Run the pre-submission validator before submitting:
 ```bash
 python validate_submission.py https://your-space-url.hf.space --repo-dir .
+python validate_submission.py https://your-space-url.hf.space --repo-dir . --smoke-graders
+python validate_submission.py --repo-dir . --smoke-graders-only
 ```
 
 ---
